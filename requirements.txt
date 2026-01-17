@@ -1,0 +1,6 @@
+# Python dependencies for ComfyUI-GaussianViewer
+# These are typically already installed with ComfyUI
+
+numpy
+torch
+Pillow

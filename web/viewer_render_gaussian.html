@@ -1,0 +1,734 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeomPack Gaussian Render Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #1a1a1a;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            height: 100vh;
+        }
+
+        #viewerContainer {
+            width: 100%;
+            height: 100%;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        .status {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: #6cc;
+            font-size: 14px;
+            font-family: monospace;
+        }
+
+        .status.hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="viewerContainer">
+        <canvas id="canvas"></canvas>
+        <div id="status" class="status"></div>
+    </div>
+
+    <!-- Load bundled gsplat.js -->
+    <script src="./js/gsplat-bundle.js"></script>
+
+    <script type="module">
+        // Use the globally exported GSPLAT
+        const SPLAT = window.GSPLAT;
+
+        // DOM elements
+        const canvas = document.getElementById('canvas');
+        const statusEl = document.getElementById('status');
+
+        // gsplat.js components
+        let scene = null;
+        let camera = null;
+        let renderer = null;
+        let controls = null;
+        let currentSplat = null;
+        let originalScales = null;
+        let baseScales = null;
+
+        const DEFAULT_FOCAL_LENGTH = 30;
+
+        // Current render request
+        let currentRequestId = null;
+
+        // PLY file cache to avoid reloading
+        const plyCache = new Map();
+
+        // Get cache key from filename
+        function getPlyCacheKey(filename) {
+            return filename || 'default';
+        }
+
+        // Initialize the viewer
+        function initViewer() {
+            try {
+                scene = new SPLAT.Scene();
+                camera = new SPLAT.Camera();
+                renderer = new SPLAT.WebGLRenderer(canvas);
+                controls = new SPLAT.OrbitControls(camera, canvas);
+
+                camera.data.fx = DEFAULT_FOCAL_LENGTH;
+                camera.data.fy = DEFAULT_FOCAL_LENGTH;
+
+                // Handle resize
+                const resize = () => {
+                    renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+                };
+                window.addEventListener('resize', resize);
+                resize();
+
+                console.log('[RenderGaussian] Initialized successfully');
+            } catch (err) {
+                console.error('[RenderGaussian] Init error:', err);
+                sendError(currentRequestId, 'Failed to initialize WebGL viewer: ' + err.message);
+            }
+        }
+
+        // Update status text
+        function setStatus(text) {
+            statusEl.textContent = text;
+        }
+
+        // Send render result back to parent
+        function sendRenderResult(requestId, image) {
+            if (requestId) {
+                window.parent.postMessage({
+                    type: 'RENDER_RESULT',
+                    request_id: requestId,
+                    image: image,
+                    timestamp: Date.now()
+                }, '*');
+                console.log('[RenderGaussian] Sent render result for', requestId);
+            }
+        }
+
+        // Send error back to parent
+        function sendError(requestId, error) {
+            if (requestId) {
+                window.parent.postMessage({
+                    type: 'RENDER_ERROR',
+                    request_id: requestId,
+                    error: error,
+                    timestamp: Date.now()
+                }, '*');
+                console.error('[RenderGaussian] Sent error for', requestId + ':', error);
+            }
+        }
+
+        // Set camera from extrinsics and intrinsics
+        function setCameraFromExtrinsics(extrinsics, intrinsics, splat) {
+            console.log('[RenderGaussian] ===== setCameraFromExtrinsics called =====');
+            console.log('[RenderGaussian] camera:', camera !== null, 'controls:', controls !== null, 'splat:', splat !== null);
+            
+            if (!camera || !controls) {
+                console.error('[RenderGaussian] ERROR: camera or controls is null');
+                return;
+            }
+
+            console.log('[RenderGaussian] Extrinsics:', extrinsics);
+            console.log('[RenderGaussian] Intrinsics:', intrinsics);
+
+            // Parse extrinsics to get camera position
+            let camPosX = 0, camPosY = 0, camPosZ = 0;
+            let hasValidExtrinsics = false;
+
+            if (extrinsics && Array.isArray(extrinsics) && extrinsics.length === 4) {
+                console.log('[RenderGaussian] Parsing extrinsics matrix...');
+                const R = [
+                    [extrinsics[0][0], extrinsics[0][1], extrinsics[0][2]],
+                    [extrinsics[1][0], extrinsics[1][1], extrinsics[1][2]],
+                    [extrinsics[2][0], extrinsics[2][1], extrinsics[2][2]]
+                ];
+                const t = [extrinsics[0][3], extrinsics[1][3], extrinsics[2][3]];
+
+                console.log('[RenderGaussian] Rotation matrix R:', R);
+                console.log('[RenderGaussian] Translation vector t:', t);
+
+                camPosX = -(R[0][0] * t[0] + R[1][0] * t[1] + R[2][0] * t[2]);
+                camPosY = -(R[0][1] * t[0] + R[1][1] * t[1] + R[2][1] * t[2]);
+                camPosZ = -(R[0][2] * t[0] + R[1][2] * t[1] + R[2][2] * t[2]);
+                hasValidExtrinsics = [camPosX, camPosY, camPosZ].every((v) => Number.isFinite(v));
+
+                console.log('[RenderGaussian] Calculated camera position:', camPosX, camPosY, camPosZ);
+            } else {
+                console.warn('[RenderGaussian] WARNING: Invalid or missing extrinsics');
+            }
+
+            // Default target position
+            let targetX = 0, targetY = 0, targetZ = 0;
+            let orbitZ = 2;
+
+            if (splat && splat.bounds) {
+                const center = splat.bounds.center();
+                const size = splat.bounds.size();
+
+                targetX = center.x;
+                targetY = center.y;
+                targetZ = center.z;
+                
+                // Calculate orbit distance based on scene size
+                const maxSize = Math.max(size.x, size.y, size.z);
+                orbitZ = targetZ + maxSize * 2.5;  // Increased from 1.5 to 2.5 for better view
+                
+                console.log('[RenderGaussian] Scene bounds - center:', center, 'size:', size, 'orbitZ:', orbitZ);
+            } else {
+                console.warn('[RenderGaussian] WARNING: No splat bounds available');
+            }
+
+            // If no camera position from extrinsics, use a reasonable default
+            if (!hasValidExtrinsics) {
+                console.log('[RenderGaussian] Using default camera position (no valid extrinsics)');
+                // Place camera in front of the scene, looking at the center
+                // Calculate a good viewing angle based on scene bounds
+                if (splat && splat.bounds) {
+                    const size = splat.bounds.size();
+                    const maxSize = Math.max(size.x, size.y, size.z);
+                    
+                    // Position camera to look at scene from a good angle
+                    // For typical scenes, this provides a nice isometric-like view
+                    camPosX = targetX + maxSize * 0.8;
+                    camPosY = targetY - maxSize * 0.6;  // Higher viewpoint
+                    camPosZ = targetZ + maxSize * 0.8;
+                    
+                    console.log('[RenderGaussian] Calculated default camera position from scene bounds');
+                } else {
+                    camPosX = targetX;
+                    camPosY = targetY;
+                    camPosZ = orbitZ;
+                }
+            } else {
+                console.log('[RenderGaussian] Using camera position from extrinsics');
+            }
+
+            // Calculate FOV and set camera focal length from intrinsics
+            if (intrinsics && Array.isArray(intrinsics) && intrinsics.length >= 2) {
+                const fx = intrinsics[0][0];
+                const fy = intrinsics[1][1];
+                const cx = intrinsics[0][2];
+                const cy = intrinsics[1][2];
+                const imageWidth = cx * 2;
+                const imageHeight = cy * 2;
+
+                console.log('[RenderGaussian] Image dimensions:', imageWidth, 'x', imageHeight, 'fx:', fx, 'fy:', fy);
+
+                // Lock renderer size to native image resolution
+                renderer.setSize(imageWidth, imageHeight);
+
+                camera.data.fx = fx;
+                camera.data.fy = fy;
+
+                // Calculate scale compensation
+                const containerWidth = canvas.clientWidth || 512;
+                const ratio = imageWidth / containerWidth;
+                const DENSITY_BOOST = 3.0;
+                let gaussianScaleCompensation = ratio * DENSITY_BOOST;
+                
+                console.log('[RenderGaussian] Scale compensation:', gaussianScaleCompensation);
+
+                // Apply to splat if loaded
+                if (currentSplat && currentSplat.data && currentSplat.data.scales && originalScales) {
+                    const scales = currentSplat.data.scales;
+                    for (let i = 0; i < scales.length; i++) {
+                        const base = baseScales ? baseScales[i] : originalScales[i];
+                        originalScales[i] = base * gaussianScaleCompensation;
+                        scales[i] = originalScales[i];
+                    }
+                    currentSplat.data.changed = true;
+                    console.log('[RenderGaussian] Applied scale compensation to', scales.length, 'points');
+                }
+            } else {
+                // No intrinsics, use reasonable defaults
+                const defaultSize = renderer.canvas.clientWidth || 512;
+                renderer.setSize(defaultSize, defaultSize);
+                camera.data.fx = DEFAULT_FOCAL_LENGTH;
+                camera.data.fy = DEFAULT_FOCAL_LENGTH;
+                console.log('[RenderGaussian] No intrinsics, using default focal length:', DEFAULT_FOCAL_LENGTH);
+            }
+
+            // Y-down coordinate system
+            camPosY = -camPosY;
+            targetY = -targetY;
+
+            const camPos = new SPLAT.Vector3(camPosX, camPosY, camPosZ);
+            const targetPos = new SPLAT.Vector3(targetX, targetY, targetZ);
+
+            camera.position.x = camPosX;
+            camera.position.y = camPosY;
+            camera.position.z = camPosZ;
+            controls.setCameraTarget(targetPos);
+            controls.update();
+
+            console.log('[RenderGaussian] Camera set - position:', camPosX, camPosY, camPosZ, 'target:', targetX, targetY, targetZ);
+        }
+
+        function setCameraFromState(cameraState) {
+            if (!camera || !controls || !cameraState) return;
+
+            const position = cameraState.position;
+            const target = cameraState.target;
+            const fx = cameraState.fx;
+            const fy = cameraState.fy;
+            const imageWidth = cameraState.image_width;
+            const imageHeight = cameraState.image_height;
+
+            if (imageWidth && imageHeight) {
+                renderer.setSize(imageWidth, imageHeight);
+            }
+            if (fx) camera.data.fx = fx;
+            if (fy) camera.data.fy = fy;
+
+            if (position) {
+                camera.position.x = position.x ?? camera.position.x;
+                camera.position.y = position.y ?? camera.position.y;
+                camera.position.z = position.z ?? camera.position.z;
+            }
+
+            if (target) {
+                const targetPos = new SPLAT.Vector3(target.x, target.y, target.z);
+                controls.setCameraTarget(targetPos);
+            }
+
+            controls.update();
+        }
+
+        function applyScaleCompensation(compensation) {
+            if (!compensation || !currentSplat || !currentSplat.data || !currentSplat.data.scales || !baseScales) {
+                return;
+            }
+            const scales = currentSplat.data.scales;
+            for (let i = 0; i < scales.length; i++) {
+                originalScales[i] = baseScales[i] * compensation;
+                scales[i] = originalScales[i];
+            }
+            currentSplat.data.changed = true;
+        }
+
+        function applyScaleFromState(cameraState) {
+            if (!cameraState || !currentSplat || !currentSplat.data || !currentSplat.data.scales || !originalScales) {
+                return;
+            }
+            const scale = cameraState.scale;
+            if (!scale) return;
+            const scales = currentSplat.data.scales;
+            for (let i = 0; i < scales.length; i++) {
+                scales[i] = originalScales[i] * scale;
+            }
+            currentSplat.data.changed = true;
+        }
+
+        function waitForFrame() {
+            return new Promise(resolve => requestAnimationFrame(() => resolve()));
+        }
+
+        async function waitForRenderReady(timeoutMs = 3000) {
+            const start = Date.now();
+            while (Date.now() - start < timeoutMs) {
+                if (scene && camera) {
+                    controls.update();
+                    renderer.render(scene, camera);
+                }
+
+                const renderProgram = renderer?.renderProgram;
+                const depthLen = renderProgram?.depthIndex?.length || 0;
+                const updating = renderProgram?.renderData?.updating;
+
+                if (depthLen > 0 && !updating) {
+                    console.log(`[RenderGaussian] Render ready: depthIndex=${depthLen}, updating=${updating}`);
+                    return true;
+                }
+
+                await waitForFrame();
+            }
+
+            console.warn('[RenderGaussian] Render not ready before timeout');
+            return false;
+        }
+
+        async function warmupRender(frames = 3) {
+            if (!scene || !camera) return;
+            for (let i = 0; i < frames; i++) {
+                controls.update();
+                renderer.render(scene, camera);
+                await waitForFrame();
+            }
+        }
+
+        // Load PLY from ArrayBuffer
+        async function loadPLYFromArrayBuffer(arrayBuffer, filename) {
+            try {
+                setStatus('Loading PLY file...');
+
+                const cacheKey = getPlyCacheKey(filename);
+                console.log('[RenderGaussian] Cache key:', cacheKey);
+
+                // Check cache first
+                if (plyCache.has(cacheKey)) {
+                    console.log('[RenderGaussian] Using cached PLY for:', cacheKey);
+                    const cachedSplat = plyCache.get(cacheKey);
+                    
+                    // Clear scene
+                    if (scene.objects && scene.objects.length > 0) {
+                        while (scene.objects.length > 0) {
+                            scene.removeObject(scene.objects[0]);
+                        }
+                    }
+
+                    // Clone the cached splat to scene
+                    const clonedSplat = cachedSplat.clone();
+                    scene.addObject(clonedSplat);
+                    currentSplat = clonedSplat;
+
+                    // Store original scales
+                    if (currentSplat.data && currentSplat.data.scales) {
+                        const scales = currentSplat.data.scales;
+                        baseScales = new Float32Array(scales.length);
+                        originalScales = new Float32Array(scales.length);
+                        for (let i = 0; i < scales.length; i++) {
+                            baseScales[i] = scales[i];
+                            originalScales[i] = scales[i];
+                        }
+                    }
+
+                    setStatus('PLY loaded (cached)');
+                    return;
+                }
+
+                // Clear scene
+                if (scene.objects && scene.objects.length > 0) {
+                    while (scene.objects.length > 0) {
+                        scene.removeObject(scene.objects[0]);
+                    }
+                }
+                currentSplat = null;
+
+                console.log('[RenderGaussian] Loading PLY from buffer, size:', arrayBuffer.byteLength);
+
+                // Load into scene
+                const blob = new Blob([arrayBuffer], { type: 'application/octet-stream' });
+                const blobUrl = URL.createObjectURL(blob);
+                await SPLAT.PLYLoader.LoadAsync(blobUrl, scene);
+                URL.revokeObjectURL(blobUrl);
+
+                // Get loaded splat
+                if (scene.objects && scene.objects.length > 0) {
+                    currentSplat = scene.objects[scene.objects.length - 1];
+
+                    // Store original scales
+                    if (currentSplat.data && currentSplat.data.scales) {
+                        const scales = currentSplat.data.scales;
+                        baseScales = new Float32Array(scales.length);
+                        originalScales = new Float32Array(scales.length);
+                        for (let i = 0; i < scales.length; i++) {
+                            baseScales[i] = scales[i];
+                            originalScales[i] = scales[i];
+                        }
+                    }
+
+                    // Cache the splat for future use
+                    if (currentSplat.clone) {
+                        plyCache.set(cacheKey, currentSplat);
+                        console.log('[RenderGaussian] Cached PLY for:', cacheKey);
+                    }
+                }
+
+                if (currentSplat && currentSplat.data) {
+                    currentSplat.data.changed = true;
+                }
+
+                setStatus('PLY loaded');
+                console.log('[RenderGaussian] PLY loaded successfully');
+            } catch (err) {
+                console.error('[RenderGaussian] Load error:', err);
+                sendError(currentRequestId, 'Failed to load PLY: ' + err.message);
+                throw err;
+            }
+        }
+
+        // Render scene and return image
+        async function renderScene(requestId, outputResolution, outputAspectRatio) {
+            try {
+                setStatus('Rendering...');
+
+                // Pause any animation
+                // Force a single render
+                if (scene && camera) {
+                    controls.update();
+                    renderer.render(scene, camera);
+                }
+                await warmupRender(4);
+                await waitForRenderReady(3000);
+
+                // Determine output dimensions
+                const canvas = renderer.canvas;
+                const fallbackWidth = canvas?.width || 1;
+                const fallbackHeight = canvas?.height || 1;
+                
+                // DEBUG: Check if canvas has any content
+                console.log('[RenderGaussian] Source canvas info:');
+                console.log(`  Width: ${canvas.width}, Height: ${canvas.height}`);
+                console.log(`  Scene objects: ${scene?.objects?.length || 0}`);
+                console.log(`  Current splat: ${currentSplat ? 'loaded' : 'null'}`);
+
+                // WebGL canvas can't be read via 2D context; use readPixels instead
+                const gl = renderer?.gl;
+                if (gl) {
+                    try {
+                        const w = canvas.width;
+                        const h = canvas.height;
+                        const pixels = new Uint8Array(w * h * 4);
+                        gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+                        let hasNonZero = false;
+                        let maxAlpha = 0;
+                        for (let i = 0; i < pixels.length; i += 4) {
+                            const a = pixels[i + 3];
+                            if (a > maxAlpha) maxAlpha = a;
+                            if (a > 10) {
+                                hasNonZero = true;
+                                break;
+                            }
+                        }
+                        console.log(`[RenderGaussian] Canvas pixel check (readPixels): hasNonZero=${hasNonZero}, maxAlpha=${maxAlpha}`);
+                    } catch (e) {
+                        console.warn('[RenderGaussian] Could not check canvas pixels (readPixels):', e);
+                    }
+                } else {
+                    console.warn('[RenderGaussian] No WebGL context available for pixel check');
+                }
+                
+                const aspect = parseAspectRatio(outputAspectRatio, fallbackWidth, fallbackHeight);
+                const resolution = Math.max(1, parseInt(outputResolution, 10) || fallbackWidth);
+
+                let targetWidth, targetHeight;
+                if (aspect >= 1.0) {
+                    targetWidth = resolution;
+                    targetHeight = Math.max(1, Math.round(resolution / aspect));
+                } else {
+                    targetHeight = resolution;
+                    targetWidth = Math.max(1, Math.round(resolution * aspect));
+                }
+
+                console.log('[RenderGaussian] Output dimensions:', targetWidth, 'x', targetHeight);
+
+                // Create output canvas with black background
+                const outputCanvas = document.createElement('canvas');
+                outputCanvas.width = targetWidth;
+                outputCanvas.height = targetHeight;
+                const ctx = outputCanvas.getContext('2d');
+                ctx.fillStyle = '#000000';
+                ctx.fillRect(0, 0, targetWidth, targetHeight);
+
+                // Read pixels from WebGL canvas into a 2D canvas (avoids toDataURL black issue)
+                const sourceCanvas = document.createElement('canvas');
+                sourceCanvas.width = canvas.width;
+                sourceCanvas.height = canvas.height;
+                const sourceCtx = sourceCanvas.getContext('2d');
+                if (gl && sourceCtx) {
+                    const w = canvas.width;
+                    const h = canvas.height;
+                    const pixels = new Uint8Array(w * h * 4);
+                    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+                    // Flip Y because WebGL origin is bottom-left
+                    const imageData = sourceCtx.createImageData(w, h);
+                    for (let y = 0; y < h; y++) {
+                        const srcRow = (h - 1 - y) * w * 4;
+                        const dstRow = y * w * 4;
+                        imageData.data.set(pixels.subarray(srcRow, srcRow + w * 4), dstRow);
+                    }
+                    sourceCtx.putImageData(imageData, 0, 0);
+                } else {
+                    // Fallback to drawing the canvas directly if readPixels isn't available
+                    sourceCtx?.drawImage(canvas, 0, 0);
+                }
+
+                // Draw source canvas with aspect ratio adjustment
+                const sourceWidth = sourceCanvas.width;
+                const sourceHeight = sourceCanvas.height;
+                const sourceAspect = sourceWidth / sourceHeight;
+
+                let sx = 0, sy = 0, sWidth = sourceWidth, sHeight = sourceHeight;
+
+                if (Math.abs(sourceAspect - aspect) > 1e-4) {
+                    if (sourceAspect > aspect) {
+                        sWidth = Math.round(sourceHeight * aspect);
+                        sx = Math.round((sourceWidth - sWidth) / 2);
+                    } else {
+                        sHeight = Math.round(sourceWidth / aspect);
+                        sy = Math.round((sourceHeight - sHeight) / 2);
+                    }
+                }
+
+                ctx.drawImage(sourceCanvas, sx, sy, sWidth, sHeight, 0, 0, targetWidth, targetHeight);
+
+                // Convert to base64
+                const dataUrl = outputCanvas.toDataURL('image/png');
+
+                setStatus('Render complete');
+                sendRenderResult(requestId, dataUrl);
+
+            } catch (err) {
+                console.error('[RenderGaussian] Render error:', err);
+                sendError(requestId, 'Failed to render: ' + err.message);
+                setStatus('Error');
+            }
+        }
+
+        function parseAspectRatio(value, fallbackWidth, fallbackHeight) {
+            if (!value || value === "source") {
+                return fallbackWidth > 0 && fallbackHeight > 0 ? fallbackWidth / fallbackHeight : 1.0;
+            }
+            if (value.includes(":")) {
+                const parts = value.split(":");
+                const w = parseFloat(parts[0]);
+                const h = parseFloat(parts[1]);
+                if (w > 0 && h > 0) {
+                    return w / h;
+                }
+            }
+            return 1.0;
+        }
+
+        // Helper to draw black background behind transparent canvas
+        function getCanvasWithBlackBackground(sourceCanvas) {
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = sourceCanvas.width;
+            tempCanvas.height = sourceCanvas.height;
+            const ctx = tempCanvas.getContext('2d');
+
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+            ctx.drawImage(sourceCanvas, 0, 0);
+
+            return tempCanvas;
+        }
+
+        // Listen for messages from parent
+        window.addEventListener('message', async (event) => {
+            const startTime = Date.now();
+            const { type, request_id, ply_data, ply_path, filename, output_resolution, 
+                     output_aspect_ratio, extrinsics, intrinsics, camera_state } = event.data;
+
+            console.log('[RenderGaussian] ============================================');
+            console.log('[RenderGaussian] ===== MESSAGE RECEIVED =====');
+            console.log('[RenderGaussian] ============================================');
+            console.log('[RenderGaussian] Message type:', type);
+            console.log('[RenderGaussian] Message keys:', Object.keys(event.data));
+            console.log('[RenderGaussian] Request ID:', request_id);
+            console.log('[RenderGaussian] Filename:', filename);
+
+            if (type === 'RENDER_REQUEST') {
+                console.log('[RenderGaussian] ===== PROCESSING RENDER REQUEST =====');
+                console.log('[RenderGaussian] Request parameters:');
+                console.log(`  request_id: ${request_id}`);
+                console.log(`  filename: ${filename}`);
+                console.log(`  output_resolution: ${output_resolution}`);
+                console.log(`  output_aspect_ratio: ${output_aspect_ratio}`);
+                console.log(`  has ply_data: ${ply_data !== null} (${ply_data ? ply_data.byteLength + ' bytes' : 'N/A'})`);
+                console.log(`  has ply_path: ${ply_path !== null}`);
+                console.log(`  has extrinsics: ${extrinsics !== null}`);
+                console.log(`  has intrinsics: ${intrinsics !== null}`);
+                console.log(`  has camera_state: ${camera_state !== null}`);
+                
+                currentRequestId = request_id;
+
+                try {
+                    // Load PLY from ArrayBuffer (cached)
+                    if (ply_data) {
+                        console.log('[RenderGaussian] Loading PLY from ArrayBuffer...');
+                        await loadPLYFromArrayBuffer(ply_data, filename);
+                        console.log('[RenderGaussian] PLY loaded successfully');
+                    } else if (ply_path) {
+                        console.log('[RenderGaussian] Loading PLY from path (fallback)...');
+                        // Fallback to old path-based loading
+                        const response = await fetch(ply_path);
+                        const arrayBuffer = await response.arrayBuffer();
+                        await loadPLYFromArrayBuffer(arrayBuffer, filename);
+                        console.log('[RenderGaussian] PLY loaded successfully (from path)');
+                    } else {
+                        throw new Error('No PLY data or path provided');
+                    }
+
+                    // Set camera parameters
+                    console.log('[RenderGaussian] Setting camera parameters...');
+                    if (camera_state) {
+                        console.log('[RenderGaussian] Using camera_state');
+                        let compensation = camera_state.scale_compensation;
+                        if (!compensation) {
+                            const imageWidth = camera_state.image_width;
+                            const containerWidth = canvas.clientWidth || 512;
+                            console.log(`[RenderGaussian] Computing scale compensation: imageWidth=${imageWidth}, containerWidth=${containerWidth}`);
+                            if (imageWidth && containerWidth) {
+                                const ratio = imageWidth / containerWidth;
+                                compensation = ratio * 3.0;
+                                console.log(`[RenderGaussian] Computed scale compensation: ${compensation} (ratio=${ratio})`);
+                            }
+                        }
+                        if (compensation) {
+                            console.log(`[RenderGaussian] Applying scale compensation: ${compensation}`);
+                            applyScaleCompensation(compensation);
+                        }
+                        console.log('[RenderGaussian] Setting camera from state...');
+                        setCameraFromState(camera_state);
+                        console.log('[RenderGaussian] Applying scale from state...');
+                        applyScaleFromState(camera_state);
+                    } else if (extrinsics || intrinsics) {
+                        console.log('[RenderGaussian] Using extrinsics/intrinsics');
+                        console.log(`[RenderGaussian] Extrinsics: ${extrinsics ? JSON.stringify(extrinsics).substring(0, 100) + '...' : 'null'}`);
+                        console.log(`[RenderGaussian] Intrinsics: ${intrinsics ? JSON.stringify(intrinsics).substring(0, 100) + '...' : 'null'}`);
+                        setCameraFromExtrinsics(extrinsics, intrinsics, currentSplat);
+                    } else {
+                        console.log('[RenderGaussian] No camera parameters provided, using defaults');
+                    }
+
+                    // Render scene
+                    console.log('[RenderGaussian] Starting render...');
+                    await renderScene(request_id, output_resolution, output_aspect_ratio);
+                    console.log('[RenderGaussian] Render completed');
+
+                } catch (err) {
+                    console.error('[RenderGaussian] ERROR: Render request failed');
+                    console.error('[RenderGaussian] Error:', err);
+                    console.error('[RenderGaussian] Error stack:', err.stack);
+                    console.log(`[RenderGaussian] Total time (failed): ${Date.now() - startTime}ms`);
+                    // Error already sent in loadPLYFromArrayBuffer or renderScene
+                }
+                
+                console.log(`[RenderGaussian] Total message processing time: ${Date.now() - startTime}ms`);
+            } else if (type === 'RENDER_ERROR') {
+                console.error('[RenderGaussian] ERROR: Error from parent:', event.data.error);
+                setStatus('Error: ' + event.data.error);
+            } else {
+                console.log('[RenderGaussian] Unknown message type:', type);
+            }
+        });
+
+        // Initialize on load
+        initViewer();
+        console.log('[RenderGaussian] Ready - waiting for RENDER_REQUEST message');
+    </script>
+</body>
+</html>
