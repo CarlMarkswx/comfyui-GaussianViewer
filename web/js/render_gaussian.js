@@ -195,6 +195,8 @@ app.registerExtension({
                             }, 2000);
 
                             setPreviewImage(image);
+                        } else {
+                            console.warn("[GeomPack Render Gaussian] Render result received with no pending request:", request_id);
                         }
 
                         // Forward result to backend for IMAGE output
@@ -206,6 +208,8 @@ app.registerExtension({
                             });
                             if (!response.ok) {
                                 console.error("[GeomPack Render Gaussian] Failed to send render result:", response.status);
+                            } else {
+                                console.log("[GeomPack Render Gaussian] Render result forwarded to backend");
                             }
                         } catch (error) {
                             console.error("[GeomPack Render Gaussian] Error sending render result:", error);
@@ -277,7 +281,8 @@ app.registerExtension({
                     const intrinsics = message.intrinsics || null;
                     const cameraState = message.camera_state || null;
 
-                    console.log("[GeomPack Render Gaussian] Render parameters:");
+                    console.log("[GeomPack Render Gaussian] ===== RENDER PARAMETERS ANALYSIS =====");
+                    console.log("[GeomPack Render Gaussian] Basic parameters:");
                     console.log(`  PLY file: ${plyFile}`);
                     console.log(`  Filename: ${filename}`);
                     console.log(`  Resolution: ${resolution}`);
@@ -285,6 +290,44 @@ app.registerExtension({
                     console.log(`  Has extrinsics: ${extrinsics !== null}`);
                     console.log(`  Has intrinsics: ${intrinsics !== null}`);
                     console.log(`  Has camera_state: ${cameraState !== null}`);
+                    
+                    if (extrinsics) {
+                        console.log("[GeomPack Render Gaussian] Extrinsics matrix:");
+                        console.log(JSON.stringify(extrinsics, null, 2));
+                        // Calculate camera position from extrinsics
+                        if (extrinsics.length === 4) {
+                            const R = [
+                                [extrinsics[0][0], extrinsics[0][1], extrinsics[0][2]],
+                                [extrinsics[1][0], extrinsics[1][1], extrinsics[1][2]],
+                                [extrinsics[2][0], extrinsics[2][1], extrinsics[2][2]]
+                            ];
+                            const t = [extrinsics[0][3], extrinsics[1][3], extrinsics[2][3]];
+                            const camPosX = -(R[0][0] * t[0] + R[1][0] * t[1] + R[2][0] * t[2]);
+                            const camPosY = -(R[0][1] * t[0] + R[1][1] * t[1] + R[2][1] * t[2]);
+                            const camPosZ = -(R[0][2] * t[0] + R[1][2] * t[1] + R[2][2] * t[2]);
+                            console.log(`  Calculated camera position: x=${camPosX.toFixed(4)}, y=${camPosY.toFixed(4)}, z=${camPosZ.toFixed(4)}`);
+                        }
+                    }
+                    
+                    if (intrinsics) {
+                        console.log("[GeomPack Render Gaussian] Intrinsics matrix:");
+                        console.log(JSON.stringify(intrinsics, null, 2));
+                        if (intrinsics.length >= 2) {
+                            const fx = intrinsics[0][0];
+                            const fy = intrinsics[1][1];
+                            const cx = intrinsics[0][2];
+                            const cy = intrinsics[1][2];
+                            const imageWidth = cx * 2;
+                            const imageHeight = cy * 2;
+                            const fovY = 2 * Math.atan(imageHeight / (2 * fy));
+                            const fovYDeg = fovY * 180 / Math.PI;
+                            console.log(`  Focal length: fx=${fx}, fy=${fy}`);
+                            console.log(`  Principal point: cx=${cx}, cy=${cy}`);
+                            console.log(`  Image dimensions: ${imageWidth}x${imageHeight}`);
+                            console.log(`  Calculated FOV Y: ${fovYDeg.toFixed(2)} degrees`);
+                            console.log(`  Aspect ratio: ${(imageWidth / imageHeight).toFixed(4)}`);
+                        }
+                    }
                     
                     if (cameraState) {
                         console.log("[GeomPack Render Gaussian] Camera state details:");
@@ -294,12 +337,33 @@ app.registerExtension({
                         console.log(`  Focal length: fx=${cameraState.fx}, fy=${cameraState.fy}`);
                         console.log(`  Scale:`, cameraState.scale);
                         console.log(`  Scale compensation:`, cameraState.scale_compensation);
+                        
+                        // Calculate FOV from camera state
+                        if (cameraState.fy && cameraState.image_height) {
+                            const fovY = 2 * Math.atan(cameraState.image_height / (2 * cameraState.fy));
+                            const fovYDeg = fovY * 180 / Math.PI;
+                            console.log(`  FOV Y from camera_state: ${fovYDeg.toFixed(2)} degrees`);
+                        }
                     }
+                    
+                    // Priority analysis
+                    console.log("[GeomPack Render Gaussian] Parameter priority analysis:");
+                    if (cameraState) {
+                        console.log("  Using camera_state (highest priority)");
+                    } else if (extrinsics && intrinsics) {
+                        console.log("  Using extrinsics + intrinsics");
+                    } else if (intrinsics) {
+                        console.log("  Using intrinsics only");
+                    } else {
+                        console.log("  No camera parameters, using defaults");
+                    }
+                    console.log("[GeomPack Render Gaussian] =====================================");
 
                     console.log(`[GeomPack Render Gaussian] Processing render request ${requestId}, node_id: ${nodeId}`);
                     setStatus("Loading PLY...", "#ffcc00");
                     this.pendingRenderRequests.set(requestId, {});
                     processedRequestIds.add(requestId);
+                    console.log("[GeomPack Render Gaussian] Pending requests:", this.pendingRenderRequests.size);
 
                     try {
                         const previewRegistry = window.GEOMPACK_PREVIEW_IFRAMES || {};

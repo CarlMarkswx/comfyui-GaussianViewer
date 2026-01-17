@@ -226,17 +226,35 @@
 
         // Initialize the viewer
         function initViewer() {
+            console.log('[GaussianViewer] ===== INITIALIZING VIEWER =====');
             try {
+                console.log('[GaussianViewer] Creating scene...');
                 scene = new SPLAT.Scene();
+                
+                console.log('[GaussianViewer] Creating camera...');
                 camera = new SPLAT.Camera();
+                
+                console.log('[GaussianViewer] Creating renderer...');
                 renderer = new SPLAT.WebGLRenderer(canvas);
+                
+                console.log('[GaussianViewer] Creating orbit controls...');
                 controls = new SPLAT.OrbitControls(camera, canvas);
 
                 // Set default focal length
+                console.log('[GaussianViewer] Setting default focal length...');
+                console.log(`[GaussianViewer] DEFAULT_FOCAL_LENGTH = ${DEFAULT_FOCAL_LENGTH}`);
                 camera.data.fx = DEFAULT_FOCAL_LENGTH;
                 camera.data.fy = DEFAULT_FOCAL_LENGTH;
                 baseFocalLength = camera.data.fx;
                 baseFocalY = camera.data.fy;
+                console.log(`[GaussianViewer] Applied focal length: fx=${camera.data.fx}, fy=${camera.data.fy}`);
+                console.log(`[GaussianViewer] Base focal length stored: baseFx=${baseFocalLength}, baseFy=${baseFocalY}`);
+                
+                // Calculate and log FOV for default settings
+                const canvasHeight = canvas.clientHeight || 512;
+                const defaultFovY = 2 * Math.atan(canvasHeight / (2 * camera.data.fy));
+                const defaultFovYDeg = defaultFovY * 180 / Math.PI;
+                console.log(`[GaussianViewer] Default FOV Y (with canvas height ${canvasHeight}): ${defaultFovYDeg.toFixed(2)} degrees`);
 
                 // Handle resize
                 const resize = () => {
@@ -965,7 +983,11 @@
         }
 
         function applyCameraState(cameraState) {
-            if (!camera || !controls || !cameraState) return;
+            if (!camera || !controls || !cameraState) {
+                console.warn('[GaussianViewer] applyCameraState skipped - missing camera/controls/state');
+                return;
+            }
+            console.log('[GaussianViewer] Applying camera state:', cameraState);
 
             const position = cameraState.position;
             const target = cameraState.target;
@@ -998,14 +1020,29 @@
 
             controls.update();
             scheduleFrameLayoutUpdate();
+            console.log('[GaussianViewer] applyCameraState complete');
         }
 
         // Save camera parameters to parent for render node
         function setCameraParams() {
-            if (!renderer || !camera || !controls) return;
+            console.log('[GaussianViewer] ===== SET CAMERA PARAMS STARTED =====');
+            
+            if (!renderer || !camera || !controls) {
+                console.warn('[GaussianViewer] WARNING: Cannot set camera params - required objects missing');
+                console.log(`[GaussianViewer] renderer: ${!!renderer}, camera: ${!!camera}, controls: ${!!controls}`);
+                return;
+            }
 
             const target = getCameraTarget();
             const canvas = renderer.canvas;
+
+            console.log('[GaussianViewer] Current camera state:');
+            console.log(`  - Position: x=${camera.position.x}, y=${camera.position.y}, z=${camera.position.z}`);
+            console.log(`  - Target: ${target ? `x=${target.x}, y=${target.y}, z=${target.z}` : 'null'}`);
+            console.log(`  - Focal length: fx=${camera.data?.fx}, fy=${camera.data?.fy}`);
+            console.log(`  - Canvas size: ${canvas?.width}x${canvas?.height}`);
+            console.log(`  - Scale: ${currentScale}`);
+            console.log(`  - Scale compensation: ${gaussianScaleCompensation}`);
 
             const cameraState = {
                 position: {
@@ -1022,13 +1059,17 @@
                 scale_compensation: gaussianScaleCompensation || null
             };
 
+            console.log('[GaussianViewer] Sending camera state to parent:');
+            console.log(JSON.stringify(cameraState, null, 2));
+
             window.parent.postMessage({
                 type: 'SET_CAMERA_PARAMS',
                 camera_state: cameraState,
                 timestamp: Date.now()
             }, '*');
 
-            console.log('[GaussianViewer] Camera params sent');
+            console.log('[GaussianViewer] Message posted to parent window');
+            console.log('[GaussianViewer] ===== SET CAMERA PARAMS COMPLETE =====');
             scheduleFrameLayoutUpdate();
         }
 
@@ -1136,15 +1177,48 @@
         const focalScaleValue = document.getElementById('focalScaleValue');
 
         function applyFocalScale(value) {
+            console.log('[GaussianViewer] ===== APPLYING FOCAL SCALE =====');
+            console.log(`[GaussianViewer] Input value: ${value}`);
+            
             const scale = Math.max(0.2, Math.min(3.0, parseFloat(value) || 1.0));
+            console.log(`[GaussianViewer] Clamped scale: ${scale}`);
+            
             focalScaleInput.value = scale;
             focalScaleValue.value = scale;
+            
             const baseFx = baseFocalLength || camera?.data?.fx || DEFAULT_FOCAL_LENGTH;
             const baseFy = baseFocalY || camera?.data?.fy || DEFAULT_FOCAL_LENGTH;
+            
+            console.log(`[GaussianViewer] Base focal lengths: baseFx=${baseFx}, baseFy=${baseFy}`);
+            console.log(`[GaussianViewer] Using base: baseFocalLength=${baseFocalLength}, baseFocalY=${baseFocalY}`);
+            console.log(`[GaussianViewer] Fallback base: camera.data.fx=${camera?.data?.fx}, camera.data.fy=${camera?.data?.fy}`);
+            console.log(`[GaussianViewer] DEFAULT_FOCAL_LENGTH=${DEFAULT_FOCAL_LENGTH}`);
+            
             if (camera?.data) {
+                const oldFx = camera.data.fx;
+                const oldFy = camera.data.fy;
+                
                 camera.data.fx = baseFx * scale;
                 camera.data.fy = baseFy * scale;
+                
+                console.log(`[GaussianViewer] Updated focal lengths:`);
+                console.log(`  - Old: fx=${oldFx}, fy=${oldFy}`);
+                console.log(`  - New: fx=${camera.data.fx}, fy=${camera.data.fy}`);
+                console.log(`  - Scale factor: ${scale}x`);
+                console.log(`  - Difference: dx=${(camera.data.fx - oldFx).toFixed(4)}, dy=${(camera.data.fy - oldFy).toFixed(4)}`);
+                
+                // Calculate and log new FOV
+                if (renderer?.canvas) {
+                    const canvasHeight = renderer.canvas.height;
+                    const newFovY = 2 * Math.atan(canvasHeight / (2 * camera.data.fy));
+                    const newFovYDeg = newFovY * 180 / Math.PI;
+                    console.log(`  - Canvas height: ${canvasHeight}`);
+                    console.log(`  - New FOV Y: ${newFovYDeg.toFixed(2)} degrees`);
+                }
+            } else {
+                console.warn('[GaussianViewer] WARNING: camera.data not available, cannot apply focal scale');
             }
+            console.log('[GaussianViewer] =====================================');
         }
 
         focalScaleInput.addEventListener('input', (e) => applyFocalScale(e.target.value));
@@ -1181,18 +1255,23 @@
                 await loadPLYFromData(data, filename || 'gaussian.ply', extrinsics, intrinsics);
                 applyFocalScale(focalScaleInput.value);
                 scheduleFrameLayoutUpdate();
+            } else if (type === 'LOAD_MESH_DATA' && !data) {
+                console.warn('[GaussianViewer] LOAD_MESH_DATA missing data buffer');
             } else if (type === 'APPLY_CAMERA_STATE' && event.data?.camera_state) {
                 applyCameraState(event.data.camera_state);
             } else if (type === 'RENDER_REQUEST' && event.data?.request_id) {
                 const requestId = event.data.request_id;
                 const resolution = event.data.output_resolution;
                 const aspectRatio = event.data.output_aspect_ratio;
+                console.log('[GaussianViewer] RENDER_REQUEST:', requestId, resolution, aspectRatio);
                 renderForRequest(requestId, resolution, aspectRatio);
             } else if (type === 'OUTPUT_SETTINGS') {
                 const resolution = event.data?.output_resolution;
                 const aspectRatio = event.data?.output_aspect_ratio;
                 updateOutputSettings(resolution, aspectRatio);
                 console.log('[GaussianViewer] Updated output settings:', outputSettings);
+            } else if (type) {
+                console.log('[GaussianViewer] Unhandled message type:', type);
             }
         });
 

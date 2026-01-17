@@ -258,9 +258,12 @@ class RenderGaussianNode:
         """
         import time
         start_time = time.time()
+        print(f"[RenderGaussian] Waiting for render result: request_id={request_id}, timeout={timeout}s")
         while time.time() - start_time < timeout:
             if request_id in RenderGaussianNode.render_results:
-                return RenderGaussianNode.render_results.pop(request_id)
+                result = RenderGaussianNode.render_results.pop(request_id)
+                print(f"[RenderGaussian] Render result found for request_id={request_id}")
+                return result
             time.sleep(0.1)
         raise TimeoutError(f"Render timeout for request {request_id}")
 
@@ -338,6 +341,7 @@ class RenderGaussianNode:
         }
 
         print(f"[RenderGaussian] Sending render request with node_id={node_id}, request_id={request_id}")
+        print(f"[RenderGaussian] Render request payload keys: {list(payload.keys())}")
 
         # Try different methods to send the event
         try:
@@ -439,29 +443,61 @@ try:
         image = data.get("image")
 
         if not request_id or not image:
+            print(f"[RenderGaussian] render_result missing request_id or image: request_id={request_id}, image_present={image is not None}")
             return web.json_response({"status": "error", "reason": "missing request_id or image"}, status=400)
 
+        print(f"[RenderGaussian] render_result received: request_id={request_id}, image_len={len(image)}")
         RenderGaussianNode.render_results[request_id] = image
         return web.json_response({"status": "ok"})
 
     @PromptServer.instance.routes.post("/geompack/preview_camera")
     async def geompack_preview_camera(request):
+        print("=" * 80)
+        print("[RenderGaussian] ===== PREVIEW_CAMERA REQUEST RECEIVED =====")
+        print("=" * 80)
+        
         data = await request.json()
+        print(f"[RenderGaussian] Raw request data: {data}")
+        
         camera_state = data.get("camera_state")
         ply_file = data.get("ply_file")
         filename = data.get("filename")
+        
+        print(f"[RenderGaussian] Parsed parameters:")
+        print(f"[RenderGaussian]   - ply_file: {ply_file}")
+        print(f"[RenderGaussian]   - filename: {filename}")
+        print(f"[RenderGaussian]   - camera_state present: {camera_state is not None}")
 
         if not camera_state:
+            print(f"[RenderGaussian] ERROR: camera_state is missing!")
             return web.json_response({"status": "error", "reason": "missing camera_state"}, status=400)
+        
+        print(f"[RenderGaussian] Camera state details:")
+        print(f"[RenderGaussian]   - Keys: {list(camera_state.keys())}")
+        if 'position' in camera_state:
+            pos = camera_state['position']
+            print(f"[RenderGaussian]   - Position: x={pos.get('x')}, y={pos.get('y')}, z={pos.get('z')}")
+        if 'target' in camera_state:
+            tgt = camera_state['target']
+            print(f"[RenderGaussian]   - Target: x={tgt.get('x')}, y={tgt.get('y')}, z={tgt.get('z')}")
+        if 'fx' in camera_state or 'fy' in camera_state:
+            print(f"[RenderGaussian]   - Focal length: fx={camera_state.get('fx')}, fy={camera_state.get('fy')}")
+        if 'image_width' in camera_state or 'image_height' in camera_state:
+            print(f"[RenderGaussian]   - Image size: {camera_state.get('image_width')}x{camera_state.get('image_height')}")
+        if 'scale' in camera_state:
+            print(f"[RenderGaussian]   - Scale: {camera_state.get('scale')}")
+        if 'scale_compensation' in camera_state:
+            print(f"[RenderGaussian]   - Scale compensation: {camera_state.get('scale_compensation')}")
 
         # Use the shared set_camera_state function
+        print(f"[RenderGaussian] Saving camera state to cache...")
         for key in (ply_file, filename):
             if key:
                 set_camera_state(key, camera_state)
-                print(f"[RenderGaussian] Camera state saved for key: {key}")
-                print(f"[RenderGaussian] Position: {camera_state.get('position')}")
-                print(f"[RenderGaussian] Target: {camera_state.get('target')}")
-
+                print(f"[RenderGaussian] ✓ Camera state saved for key: '{key}'")
+        
+        print(f"[RenderGaussian] ===== PREVIEW_CAMERA REQUEST COMPLETE =====")
+        print("=" * 80)
         return web.json_response({"status": "ok"})
 
 except Exception as e:

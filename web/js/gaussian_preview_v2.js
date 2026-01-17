@@ -167,6 +167,23 @@ app.registerExtension({
                         console.log('[GeomPack Gaussian v2] Current PLY file:', this.currentPlyFile);
                         console.log('[GeomPack Gaussian v2] Current filename:', this.currentFilename);
                         
+                        const cameraState = event.data.camera_state;
+                        console.log('[GeomPack Gaussian v2] Camera state details:');
+                        console.log('[GeomPack Gaussian v2]   Position:', cameraState.position);
+                        console.log('[GeomPack Gaussian v2]   Target:', cameraState.target);
+                        console.log('[GeomPack Gaussian v2]   Focal length (fx):', cameraState.fx);
+                        console.log('[GeomPack Gaussian v2]   Focal length (fy):', cameraState.fy);
+                        console.log('[GeomPack Gaussian v2]   Image size:', `${cameraState.image_width}x${cameraState.image_height}`);
+                        console.log('[GeomPack Gaussian v2]   Scale:', cameraState.scale);
+                        console.log('[GeomPack Gaussian v2]   Scale compensation:', cameraState.scale_compensation);
+                        
+                        // Calculate and log FOV
+                        if (cameraState.fy && cameraState.image_height) {
+                            const fovY = 2 * Math.atan(cameraState.image_height / (2 * cameraState.fy));
+                            const fovYDeg = fovY * 180 / Math.PI;
+                            console.log('[GeomPack Gaussian v2]   Calculated FOV Y:', fovYDeg.toFixed(2), 'degrees');
+                        }
+                        
                         const plyFile = this.currentPlyFile;
                         const filename = this.currentFilename;
                         
@@ -180,7 +197,13 @@ app.registerExtension({
                             return;
                         }
                         
-                        console.log('[GeomPack Gaussian v2] Saving camera params to backend...');
+                        console.log('[GeomPack Gaussian v2] Preparing to send camera params to backend...');
+                        console.log('[GeomPack Gaussian v2] Payload:', {
+                            ply_file: plyFile,
+                            filename: filename,
+                            has_camera_state: !!cameraState
+                        });
+                        
                         try {
                             const response = await fetch('/geompack/preview_camera', {
                                 method: 'POST',
@@ -188,9 +211,10 @@ app.registerExtension({
                                 body: JSON.stringify({
                                     ply_file: plyFile,
                                     filename: filename,
-                                    camera_state: event.data.camera_state
+                                    camera_state: cameraState
                                 })
                             });
+                            console.log('[GeomPack Gaussian v2] Backend response status:', response.status, response.statusText);
                             if (!response.ok) {
                                 throw new Error(`HTTP ${response.status}`);
                             }
@@ -202,6 +226,7 @@ app.registerExtension({
                             }, 2000);
                         } catch (error) {
                             console.error('[GeomPack Gaussian v2] Failed to save camera params:', error);
+                            console.error('[GeomPack Gaussian v2] Error stack:', error.stack);
                             infoPanel.innerHTML = `<div style="color: #ff6b6b;">Error saving camera: ${error.message}</div>`;
                         }
                     }
@@ -222,6 +247,8 @@ app.registerExtension({
                             });
                             if (!response.ok) {
                                 console.error("[GeomPack Gaussian v2] Failed to send render result:", response.status);
+                            } else {
+                                console.log("[GeomPack Gaussian v2] Render result forwarded to backend");
                             }
                         } catch (error) {
                             console.error("[GeomPack Gaussian v2] Error sending render result:", error);
