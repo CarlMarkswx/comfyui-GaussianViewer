@@ -4,6 +4,7 @@
  */
 
 import { app } from "../../../scripts/app.js";
+import { api } from "../../../scripts/api.js";
 
 // Auto-detect extension folder name (handles ComfyUI-GeometryPack or comfyui-geometrypack)
 const EXTENSION_FOLDER = (() => {
@@ -18,12 +19,13 @@ app.registerExtension({
     name: "geompack.gaussianpreview.v2",
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "GeomPackPreviewGaussian2") {
+        if (nodeData.name === "GeomPackPreviewGaussian2" || nodeData.name === "GaussianViewer") {
             console.log("[GeomPack Gaussian v2] Registering Preview Gaussian 2.0 node");
 
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function() {
                 const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
+                const isGaussianViewer = nodeData.name === "GaussianViewer";
 
                 window.GEOMPACK_PREVIEW_IFRAMES = window.GEOMPACK_PREVIEW_IFRAMES || {};
 
@@ -106,6 +108,44 @@ app.registerExtension({
                         this.fetchAndSend?.(this.pendingMeshInfo);
                     }
                 });
+                
+                if (isGaussianViewer) {
+                    const nodeId = this.id;
+                    const handleRenderRequest = async (event) => {
+                        const message = event?.detail || event;
+                        if (!message?.request_id) {
+                            return;
+                        }
+                        if (message.node_id != null && message.node_id !== undefined && message.node_id !== nodeId) {
+                            return;
+                        }
+                        if (!iframe.contentWindow) {
+                            console.error("[GeomPack Gaussian v2] Render request received but iframe not ready");
+                            return;
+                        }
+
+                        const requestId = message.request_id;
+                        const resolution = message.output_resolution || 2048;
+                        const aspectRatio = message.output_aspect_ratio || "source";
+
+                        iframe.contentWindow.postMessage({
+                            type: "OUTPUT_SETTINGS",
+                            output_resolution: resolution,
+                            output_aspect_ratio: aspectRatio
+                        }, "*");
+
+                        iframe.contentWindow.postMessage({
+                            type: "RENDER_REQUEST",
+                            request_id: requestId,
+                            output_resolution: resolution,
+                            output_aspect_ratio: aspectRatio
+                        }, "*");
+
+                        console.log("[GeomPack Gaussian v2] Forwarded render request to preview iframe:", requestId);
+                    };
+
+                    api.addEventListener("geompack_render_request", handleRenderRequest);
+                }
 
                 // Listen for messages from iframe
                 window.addEventListener('message', async (event) => {

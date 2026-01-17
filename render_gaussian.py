@@ -479,7 +479,10 @@ try:
             print(f"[RenderGaussian]   - Position: x={pos.get('x')}, y={pos.get('y')}, z={pos.get('z')}")
         if 'target' in camera_state:
             tgt = camera_state['target']
-            print(f"[RenderGaussian]   - Target: x={tgt.get('x')}, y={tgt.get('y')}, z={tgt.get('z')}")
+            if isinstance(tgt, dict):
+                print(f"[RenderGaussian]   - Target: x={tgt.get('x')}, y={tgt.get('y')}, z={tgt.get('z')}")
+            else:
+                print(f"[RenderGaussian]   - Target: {tgt}")
         if 'fx' in camera_state or 'fy' in camera_state:
             print(f"[RenderGaussian]   - Focal length: fx={camera_state.get('fx')}, fy={camera_state.get('fy')}")
         if 'image_width' in camera_state or 'image_height' in camera_state:

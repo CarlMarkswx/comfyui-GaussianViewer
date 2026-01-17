@@ -220,6 +220,8 @@
         let baseFocalLength = null;
         let baseFocalY = null;
         let nativeAspect = null;
+        let nativeImageWidth = null;
+        let nativeImageHeight = null;
 
         // Default focal length
         const DEFAULT_FOCAL_LENGTH = 30;
@@ -524,15 +526,34 @@
         async function loadPLYFromData(arrayBuffer, filename, extrinsics, intrinsics) {
             try {
                 const meshSignature = buildMeshSignature(filename, intrinsics);
-                if (meshSignature !== lastMeshSignature) {
+                const isNewMesh = meshSignature !== lastMeshSignature;
+                if (isNewMesh) {
                     initialCameraData = null;
                     baseFocalLength = null;
                     baseFocalY = null;
+                    nativeImageWidth = null;
+                    nativeImageHeight = null;
                     lastMeshSignature = meshSignature;
+                    currentScale = 1.0;
+                    if (scaleInput) {
+                        scaleInput.value = 1.0;
+                    }
                 }
 
-                // Reset lock state
-                isResolutionLocked = false;
+                const hasIntrinsics = Array.isArray(intrinsics) && intrinsics.length >= 2;
+                if (!hasIntrinsics) {
+                    // Reset lock state when native resolution is unknown
+                    isResolutionLocked = false;
+                } else {
+                    const cx = intrinsics[0][2];
+                    const cy = intrinsics[1][2];
+                    nativeImageWidth = cx * 2;
+                    nativeImageHeight = cy * 2;
+                    isResolutionLocked = true;
+                    renderer.setSize(nativeImageWidth, nativeImageHeight);
+                    nativeAspect = nativeImageWidth / nativeImageHeight;
+                    updateCanvasDisplaySize();
+                }
                 
                 // Clear ALL existing objects from scene
                 if (scene.objects && scene.objects.length > 0) {
@@ -639,9 +660,12 @@
                         originalScales = null;
                     }
 
-                    // Reset scale when loading new splat
-                    scaleInput.value = 1.0;
-                    currentScale = 1.0;
+                    // Reapply current scale (preserve across re-runs for same mesh)
+                    if (currentScale !== 1.0) {
+                        updateGaussianScale(currentScale);
+                    } else if (scaleInput) {
+                        scaleInput.value = 1.0;
+                    }
                 }
 
                 // Set camera from extrinsics and intrinsics if provided
@@ -1035,12 +1059,15 @@
 
             const target = getCameraTarget();
             const canvas = renderer.canvas;
+            const imageWidth = nativeImageWidth || canvas?.width || null;
+            const imageHeight = nativeImageHeight || canvas?.height || null;
 
             console.log('[GaussianViewer] Current camera state:');
             console.log(`  - Position: x=${camera.position.x}, y=${camera.position.y}, z=${camera.position.z}`);
             console.log(`  - Target: ${target ? `x=${target.x}, y=${target.y}, z=${target.z}` : 'null'}`);
             console.log(`  - Focal length: fx=${camera.data?.fx}, fy=${camera.data?.fy}`);
             console.log(`  - Canvas size: ${canvas?.width}x${canvas?.height}`);
+            console.log(`  - Image size used: ${imageWidth}x${imageHeight}`);
             console.log(`  - Scale: ${currentScale}`);
             console.log(`  - Scale compensation: ${gaussianScaleCompensation}`);
 
@@ -1053,8 +1080,8 @@
                 target: target ? { x: target.x, y: target.y, z: target.z } : null,
                 fx: camera.data?.fx || null,
                 fy: camera.data?.fy || null,
-                image_width: canvas?.width || null,
-                image_height: canvas?.height || null,
+                image_width: imageWidth,
+                image_height: imageHeight,
                 scale: currentScale || 1.0,
                 scale_compensation: gaussianScaleCompensation || null
             };
