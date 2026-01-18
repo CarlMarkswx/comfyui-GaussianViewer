@@ -4,6 +4,8 @@
 
 为 ComfyUI 提供高斯泼溅（Gaussian Splatting）PLY 文件的交互式 3D 预览和高质量图像输出功能。
 
+**注意**：本插件是基于 [ComfyUI-GeometryPack](https://github.com/PozzettiAndrea/ComfyUI-GeometryPack) 改进而来，提供了更简洁和易用的单一节点方案。
+
 ## 功能特性
 
 - 🎨 **交互式 3D 预览** - 在 ComfyUI 中实时预览 Gaussian Splatting PLY 文件
@@ -50,7 +52,7 @@ pip install numpy torch Pillow
 
 插件提供以下节点：
 
-#### 1. GaussianViewer（推荐）
+#### GaussianViewer
 
 这是主节点，集成了预览和渲染功能。
 
@@ -65,20 +67,9 @@ pip install numpy torch Pillow
 **使用步骤**：
 1. 在节点中连接 PLY 文件路径
 2. 在预览窗口中调整相机视角
-3. 节点会自动渲染并输出当前视角的图像
-4. 输出的图像可用于后续处理
-
-#### 2. Preview Gaussian 2.0（已弃用）
-
-仅用于预览，不输出图像。
-
-**注意**：此节点已被标记为已弃用，建议使用 `GaussianViewer` 节点。
-
-#### 3. Render Gaussian（已弃用）
-
-仅用于渲染，需要配合预览节点使用。
-
-**注意**：此节点已被标记为已弃用，建议使用 `GaussianViewer` 节点。
+3. **重要**：点击 "Set Camera" 按钮来设置相机位置，这样才能正式开始渲染
+4. 节点会渲染并输出当前视角的图像
+5. 输出的图像可用于后续处理
 
 ### 工作流示例
 
