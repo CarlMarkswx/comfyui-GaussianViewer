@@ -217,6 +217,7 @@
         let animationId = null;
         let currentSplat = null;
         let originalScales = null;  // Store original scales for dynamic adjustment
+        let cachedSplatData = null; // Keep a copy of buffers to reattach after worker detaches
         let baseFocalLength = null;
         let baseFocalY = null;
         let nativeAspect = null;
@@ -533,6 +534,7 @@
                     baseFocalY = null;
                     nativeImageWidth = null;
                     nativeImageHeight = null;
+                    cachedSplatData = null;
                     lastMeshSignature = meshSignature;
                     currentScale = 1.0;
                     if (scaleInput) {
@@ -612,6 +614,18 @@
                         const size = currentSplat.bounds.size();
                         console.log('[GaussianViewer] Scene bounds center:', center.x, center.y, center.z);
                         console.log('[GaussianViewer] Scene bounds size:', size.x, size.y, size.z);
+                    }
+
+                    // Cache original splat buffers so we can reattach after worker detaches
+                    if (currentSplat.data && currentSplat.data.positions && currentSplat.data.rotations && currentSplat.data.colors && currentSplat.data.selection) {
+                        cachedSplatData = {
+                            positions: new Float32Array(currentSplat.data.positions),
+                            rotations: new Float32Array(currentSplat.data.rotations),
+                            colors: new Uint8Array(currentSplat.data.colors),
+                            selection: new Uint8Array(currentSplat.data.selection)
+                        };
+                    } else {
+                        cachedSplatData = null;
                     }
 
                     // Store original scales and log statistics
@@ -1119,17 +1133,42 @@
             if (currentSplat && currentSplat.data && currentSplat.data.scales && originalScales) {
                 console.log('[GaussianViewer] Updating gaussian scales with factor:', newScale);
 
-                const scales = currentSplat.data.scales;
+                const data = currentSplat.data;
+                let scales = data.scales;
+                const detached = data.detached || !scales || scales.buffer.byteLength === 0;
 
-                // Apply scale factor by multiplying (scales are in linear space)
-                for (let i = 0; i < scales.length; i++) {
-                    scales[i] = originalScales[i] * newScale;
+                if (detached) {
+                    if (!cachedSplatData) {
+                        console.warn('[GaussianViewer] Cannot reattach splat data - cached buffers missing');
+                        return;
+                    }
+                    const newScales = new Float32Array(originalScales.length);
+                    for (let i = 0; i < newScales.length; i++) {
+                        newScales[i] = originalScales[i] * newScale;
+                    }
+                    const positions = new Float32Array(cachedSplatData.positions);
+                    const rotations = new Float32Array(cachedSplatData.rotations);
+                    const colors = new Uint8Array(cachedSplatData.colors);
+                    const selection = new Uint8Array(cachedSplatData.selection);
+                    data.reattach(
+                        positions.buffer,
+                        rotations.buffer,
+                        newScales.buffer,
+                        colors.buffer,
+                        selection.buffer
+                    );
+                    scales = data.scales;
+                } else {
+                    // Apply scale factor by multiplying (scales are in linear space)
+                    for (let i = 0; i < scales.length; i++) {
+                        scales[i] = originalScales[i] * newScale;
+                    }
                 }
 
                 // Mark data as changed to trigger GPU re-upload
                 // gsplat.js checks data.changed and data.detached
-                currentSplat.data.changed = true;
-                currentSplat.data.detached = false;
+                data.changed = true;
+                data.detached = false;
                 console.log('[GaussianViewer] Set data.changed=true, data.detached=false');
 
                 // Get the render data (could be _renderData or renderData)
@@ -1188,8 +1227,12 @@
                     }
                 }
 
-                console.log('[GaussianViewer] Scale update complete. New scale[0]:', scales[0].toFixed(6),
-                            'original[0]:', originalScales[0].toFixed(6), 'multiplier:', newScale);
+                if (scales.length > 0 && originalScales.length > 0) {
+                    console.log('[GaussianViewer] Scale update complete. New scale[0]:', scales[0].toFixed(6),
+                                'original[0]:', originalScales[0].toFixed(6), 'multiplier:', newScale);
+                } else {
+                    console.log('[GaussianViewer] Scale update complete. Empty scales array.');
+                }
             } else if (currentSplat) {
                 console.log('[GaussianViewer] Cannot update scales - missing data or originalScales');
                 console.log('[GaussianViewer] currentSplat.data:', !!currentSplat.data);
