@@ -38,6 +38,7 @@ class GaussianViewerNode(RenderGaussianNode):
 
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)
+    OUTPUT_NODE = True
     FUNCTION = "gaussian_viewer"
     CATEGORY = "geompack/visualization"
 
