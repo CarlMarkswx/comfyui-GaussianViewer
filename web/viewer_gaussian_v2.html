@@ -223,6 +223,9 @@
         let nativeAspect = null;
         let nativeImageWidth = null;
         let nativeImageHeight = null;
+        let lastCameraTarget = null;
+        let lastSceneCenter = null;
+        let lastSceneSize = null;
 
         // Default focal length
         const DEFAULT_FOCAL_LENGTH = 30;
@@ -242,6 +245,21 @@
                 
                 console.log('[GaussianViewer] Creating orbit controls...');
                 controls = new SPLAT.OrbitControls(camera, canvas);
+
+                // Log zoom bounds and current zoom to help diagnose scroll limits.
+                console.log('[GaussianViewer] OrbitControls zoom bounds:', {
+                    minZoom: controls.minZoom,
+                    maxZoom: controls.maxZoom
+                });
+                controls.minZoom = 0.001;
+                controls.maxZoom = 100;
+                const originalSetCameraTarget = controls.setCameraTarget?.bind(controls);
+                if (originalSetCameraTarget) {
+                    controls.setCameraTarget = (target) => {
+                        lastCameraTarget = target || null;
+                        return originalSetCameraTarget(target);
+                    };
+                }
 
                 // Set default focal length
                 console.log('[GaussianViewer] Setting default focal length...');
@@ -281,6 +299,60 @@
                     animationId = requestAnimationFrame(frame);
                 };
                 frame();
+
+                // Diagnostic: log wheel zoom input and resulting camera state.
+                canvas.addEventListener('wheel', (event) => {
+                    const target = getCameraTarget();
+                    let distance = null;
+                    if (camera && target) {
+                        const dx = camera.position.x - target.x;
+                        const dy = camera.position.y - target.y;
+                        const dz = camera.position.z - target.z;
+                        distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+                    }
+                    if (event.deltaY < 0 && camera && target && distance !== null) {
+                        const minZoom = controls?.minZoom ?? 0;
+                        const dollyThreshold = minZoom + 0.5;
+                        if (distance <= dollyThreshold) {
+                            const dx = target.x - camera.position.x;
+                            const dy = target.y - camera.position.y;
+                            const dz = target.z - camera.position.z;
+                            const len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+                            const stepBase = lastSceneSize ? Math.max(lastSceneSize.z, lastSceneSize.x, lastSceneSize.y) : 1;
+                            const step = Math.max(0.05, stepBase * 0.01);
+                            const dirX = dx / len;
+                            const dirY = dy / len;
+                            const dirZ = dz / len;
+                            camera.position.x += dirX * step;
+                            camera.position.y += dirY * step;
+                            camera.position.z += dirZ * step;
+                            const nextTarget = new SPLAT.Vector3(
+                                target.x + dirX * step,
+                                target.y + dirY * step,
+                                target.z + dirZ * step
+                            );
+                            if (controls?.setCameraTarget) {
+                                controls.setCameraTarget(nextTarget);
+                            }
+                            console.log('[GaussianViewer] Dolly forward', {
+                                step,
+                                distance,
+                                target: nextTarget
+                            });
+                        }
+                    }
+                    console.log('[GaussianViewer] Wheel zoom', {
+                        deltaY: event.deltaY,
+                        zoomSpeed: controls?.zoomSpeed,
+                        minZoom: controls?.minZoom,
+                        maxZoom: controls?.maxZoom,
+                        cameraPos: camera ? { x: camera.position.x, y: camera.position.y, z: camera.position.z } : null,
+                        target,
+                        targetDistance: distance,
+                        fx: camera?.data?.fx,
+                        fy: camera?.data?.fy
+                    });
+                }, { passive: true });
 
                 console.log('[GaussianViewer] Initialized successfully');
             } catch (err) {
@@ -480,6 +552,8 @@
                 console.log('[GaussianViewer] Scene center:', center.x, -center.y, center.z);
                 console.log('[GaussianViewer] Closest point Z:', minZ.toFixed(1));
                 console.log('[GaussianViewer] Orbit center Z:', orbitZ.toFixed(1), '(closest + 50%)');
+                lastSceneCenter = center;
+                lastSceneSize = size;
             }
 
             // SHARP uses Y-down coordinate system, so flip camera Y as well
@@ -1017,7 +1091,7 @@
             if (typeof controls.getCameraTarget === 'function') {
                 return controls.getCameraTarget();
             }
-            return controls.target || controls._target || controls.cameraTarget || null;
+            return lastCameraTarget || controls.target || controls._target || controls.cameraTarget || null;
         }
 
         function applyCameraState(cameraState) {
