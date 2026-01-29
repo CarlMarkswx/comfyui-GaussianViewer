@@ -158,6 +158,7 @@
     <div id="viewerContainer">
         <div id="canvasWrapper">
             <canvas id="canvas"></canvas>
+            <img id="overlayImage" style="position: absolute; pointer-events: none; opacity: 0.5; display: none; z-index: 35;">
             <div id="cropFrame" aria-hidden="true"></div>
         </div>
 
@@ -187,6 +188,11 @@
             <input type="number" id="gaussianScaleValue" min="0.01" max="100" step="0.1" value="1.0" title="Gaussian scale multiplier">
         </div>
         <button id="resetCamera" title="Reset camera view">Reset View</button>
+        <div class="scale-control">
+            <span>Overlay:</span>
+            <input type="range" id="overlayAlpha" min="0" max="1" step="0.01" value="0.5" title="Overlay image transparency">
+            <input type="number" id="overlayAlphaValue" min="0" max="1" step="0.01" value="0.5" title="Overlay alpha value" style="width: 50px; background: #333; border: 1px solid #555; color: #fff; font-size: 11px; padding: 4px 6px; border-radius: 3px;">
+        </div>
         <div class="scale-control">
             <span>Focal:</span>
             <input type="range" id="focalScale" min="0.2" max="3.0" step="0.01" value="1.0" title="Focal length scale">
@@ -1022,6 +1028,12 @@
 
             canvas.style.width = `${displayWidth}px`;
             canvas.style.height = `${displayHeight}px`;
+
+            const overlayImage = document.getElementById('overlayImage');
+            if (overlayImage) {
+                overlayImage.style.width = canvas.style.width;
+                overlayImage.style.height = canvas.style.height;
+            }
         }
 
         function scheduleFrameLayoutUpdate() {
@@ -1388,14 +1400,44 @@
         document.getElementById('resetCamera').addEventListener('click', resetCamera);
         document.getElementById('setCamera').addEventListener('click', setCameraParams);
 
+        const overlayAlphaInput = document.getElementById('overlayAlpha');
+        const overlayAlphaValue = document.getElementById('overlayAlphaValue');
+
+        function applyOverlayAlpha(value) {
+            const alpha = Math.max(0, Math.min(1, parseFloat(value) || 0));
+            if (overlayAlphaInput) overlayAlphaInput.value = alpha;
+            if (overlayAlphaValue) overlayAlphaValue.value = alpha;
+
+            const overlayImage = document.getElementById('overlayImage');
+            if (overlayImage) {
+                overlayImage.style.opacity = alpha;
+            }
+        }
+
+        if (overlayAlphaInput) {
+            overlayAlphaInput.addEventListener('input', (e) => applyOverlayAlpha(e.target.value));
+        }
+        if (overlayAlphaValue) {
+            overlayAlphaValue.addEventListener('change', (e) => applyOverlayAlpha(e.target.value));
+        }
+
         // Listen for messages from parent
         window.addEventListener('message', async (event) => {
-            const { type, data, filename, extrinsics, intrinsics } = event.data;
+            const { type, data, filename, extrinsics, intrinsics, overlay_image } = event.data;
 
             if (type === 'LOAD_MESH_DATA' && data) {
                 console.log('[GaussianViewer] Received LOAD_MESH_DATA, size:', data.byteLength);
                 console.log('[GaussianViewer] Extrinsics:', extrinsics);
                 console.log('[GaussianViewer] Intrinsics:', intrinsics);
+
+                const overlayImage = document.getElementById('overlayImage');
+                if (overlay_image && overlayImage) {
+                    overlayImage.src = "/view?filename=" + encodeURIComponent(overlay_image) + "&type=output";
+                    overlayImage.style.display = "block";
+                } else if (overlayImage) {
+                    overlayImage.style.display = "none";
+                }
+
                 await loadPLYFromData(data, filename || 'gaussian.ply', extrinsics, intrinsics);
                 applyFocalScale(focalScaleInput.value);
                 scheduleFrameLayoutUpdate();

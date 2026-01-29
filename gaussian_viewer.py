@@ -8,6 +8,10 @@ Merges preview and render into a single IMAGE-producing node.
 """
 
 import os
+import uuid
+import numpy as np
+import torch
+from PIL import Image
 
 from .render_gaussian import RenderGaussianNode, COMFYUI_OUTPUT_FOLDER
 
@@ -33,6 +37,9 @@ class GaussianViewerNode(RenderGaussianNode):
                 "intrinsics": ("INTRINSICS", {
                     "tooltip": "3x3 camera intrinsics matrix for FOV"
                 }),
+                "image": ("IMAGE", {
+                    "tooltip": "Reference image to show as overlay"
+                }),
             },
         }
 
@@ -42,7 +49,7 @@ class GaussianViewerNode(RenderGaussianNode):
     FUNCTION = "gaussian_viewer"
     CATEGORY = "geompack/visualization"
 
-    def gaussian_viewer(self, ply_path: str, extrinsics=None, intrinsics=None):
+    def gaussian_viewer(self, ply_path: str, extrinsics=None, intrinsics=None, image=None):
         """
         Preview the PLY in the viewer and return the rendered IMAGE output.
         """
@@ -91,6 +98,23 @@ class GaussianViewerNode(RenderGaussianNode):
         if intrinsics is not None:
             ui_data["intrinsics"] = [intrinsics]
             print(f"[GaussianViewer] Intrinsics provided: {len(intrinsics)}x{len(intrinsics[0])}")
+
+        if image is not None:
+            print(f"[GaussianViewer] Reference image provided: {image.shape}")
+            try:
+                # Save the first image in the batch as an overlay
+                img_tensor = image[0]
+                i = 255. * img_tensor.cpu().numpy()
+                img = Image.fromarray(np.uint8(i))
+
+                overlay_filename = f"gaussian_overlay_{uuid.uuid4().hex}.png"
+                overlay_path = os.path.join(COMFYUI_OUTPUT_FOLDER, overlay_filename)
+                img.save(overlay_path)
+
+                ui_data["overlay_image"] = [overlay_filename]
+                print(f"[GaussianViewer] Overlay image saved: {overlay_filename}")
+            except Exception as e:
+                print(f"[GaussianViewer] ERROR saving overlay image: {e}")
 
         print(f"[GaussianViewer] UI data keys: {list(ui_data.keys())}")
         print("[GaussianViewer] ===== VIEWER PREVIEW READY =====")
