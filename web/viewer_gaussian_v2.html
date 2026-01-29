@@ -186,6 +186,25 @@
                 <option value="9:16">9:16</option>
             </select>
         </div>
+
+        <div id="cameraInfo" class="info-panel" style="left: auto; right: 8px; font-size: 9px; line-height: 1.2;">
+            <div id="cameraInfoContent"></div>
+        </div>
+
+        <div id="helpPanel" class="info-panel hidden" style="left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 100; min-width: 250px;">
+            <div style="font-weight: bold; border-bottom: 1px solid #444; margin-bottom: 8px; padding-bottom: 4px; color: #fff;">Keyboard Shortcuts</div>
+            <div style="display: grid; grid-template-columns: auto 1fr; gap: 4px 16px;">
+                <span style="color: #6cc;">WASD / Arrows</span> <span>Move / Pan</span>
+                <span style="color: #6cc;">Q / E</span> <span>Yaw (Left/Right)</span>
+                <span style="color: #6cc;">R / F</span> <span>Pitch (Up/Down)</span>
+                <span style="color: #6cc;">Z / X</span> <span>Roll</span>
+                <span style="color: #6cc;">Shift</span> <span>Precision (0.1x)</span>
+                <span style="color: #6cc;">Left Click</span> <span>Orbit</span>
+                <span style="color: #6cc;">Right Click</span> <span>Pan</span>
+                <span style="color: #6cc;">Scroll</span> <span>Zoom</span>
+            </div>
+            <button id="closeHelp" style="margin-top: 12px; width: 100%; background: #444; border: none; color: #fff; padding: 6px; cursor: pointer; border-radius: 3px;">Close</button>
+        </div>
     </div>
 
     <div id="controlsBar">
@@ -204,6 +223,7 @@
             <input type="range" id="focalScale" min="0.2" max="3.0" step="0.01" value="1.0" title="Focal length scale">
             <input type="number" id="focalScaleValue" min="0.2" max="3.0" step="0.01" value="1.0" title="Focal length scale value">
         </div>
+        <button id="toggleHelp" title="Show keyboard shortcuts">?</button>
         <button id="setCamera" title="Save current camera for render">Set Camera</button>
     </div>
 
@@ -301,6 +321,7 @@
                 // Start render loop
                 const frame = () => {
                     controls.update();
+                    updateCameraInfoDisplay();
                     renderer.render(scene, camera);
                     animationId = requestAnimationFrame(frame);
                 };
@@ -392,6 +413,7 @@
         function resumeAnimationLoop() {
             const frame = () => {
                 controls.update();
+                updateCameraInfoDisplay();
                 renderer.render(scene, camera);
                 animationId = requestAnimationFrame(frame);
             };
@@ -1389,6 +1411,32 @@
             scheduleFrameLayoutUpdate();
         }
 
+        function updateCameraInfoDisplay() {
+            const cameraInfoContent = document.getElementById('cameraInfoContent');
+            if (!cameraInfoContent || !camera || !controls) return;
+
+            const pos = camera.position;
+            const toDeg = (rad) => (rad * 180 / Math.PI).toFixed(2);
+
+            // If it's our custom PreciseOrbitControls, use its tracked orientation
+            let pitch = 0, yaw = 0, roll = 0;
+            if (controls.currentAlpha !== undefined) {
+                pitch = -controls.currentBeta;
+                yaw = -controls.currentAlpha;
+                roll = controls.currentRoll;
+            }
+
+            cameraInfoContent.innerHTML = `
+                <div style="color: #6cc; margin-bottom: 2px; font-weight: bold;">Camera State</div>
+                <div style="display: grid; grid-template-columns: auto 1fr; gap: 2px 8px;">
+                    <span style="color: #888;">Pos:</span>
+                    <span>${pos.x.toFixed(2)}, ${pos.y.toFixed(2)}, ${pos.z.toFixed(2)}</span>
+                    <span style="color: #888;">Rot:</span>
+                    <span>P:${toDeg(pitch)}° Y:${toDeg(yaw)}° R:${toDeg(roll)}°</span>
+                </div>
+            `;
+        }
+
         if (ratioSelect) {
             ratioSelect.addEventListener('change', (e) => {
                 setAspectRatio(e.target.value);
@@ -1399,6 +1447,22 @@
         // Event listeners
         document.getElementById('resetCamera').addEventListener('click', resetCamera);
         document.getElementById('setCamera').addEventListener('click', setCameraParams);
+
+        const helpPanel = document.getElementById('helpPanel');
+        const toggleHelpBtn = document.getElementById('toggleHelp');
+        const closeHelpBtn = document.getElementById('closeHelp');
+
+        if (toggleHelpBtn && helpPanel) {
+            toggleHelpBtn.addEventListener('click', () => {
+                helpPanel.classList.toggle('hidden');
+            });
+        }
+
+        if (closeHelpBtn && helpPanel) {
+            closeHelpBtn.addEventListener('click', () => {
+                helpPanel.classList.add('hidden');
+            });
+        }
 
         const overlayAlphaInput = document.getElementById('overlayAlpha');
         const overlayAlphaValue = document.getElementById('overlayAlphaValue');
