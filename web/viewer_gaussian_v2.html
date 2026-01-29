@@ -55,9 +55,10 @@
 
         #controlsBar {
             display: flex;
+            flex-wrap: wrap;
             justify-content: center;
             align-items: center;
-            gap: 16px;
+            gap: 8px 12px;
             background: #252525;
             padding: 8px 12px;
             border-top: 1px solid #333;
@@ -97,6 +98,11 @@
             font-size: 11px;
             padding: 4px 6px;
             border-radius: 3px;
+        }
+
+        .scale-control input[type="range"] {
+            width: 70px;
+            margin: 0;
         }
 
         .info-panel {
