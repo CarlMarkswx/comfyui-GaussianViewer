@@ -327,6 +327,7 @@ app.registerExtension({
                         // Extract camera parameters if provided
                         const extrinsics = uiData.extrinsics?.[0] || null;
                         const intrinsics = uiData.intrinsics?.[0] || null;
+                        const overlay_image = uiData.overlay_image?.[0] || null;
 
                         // Resize node to match image aspect ratio from intrinsics
                         if (intrinsics && intrinsics[0] && intrinsics[1]) {
@@ -359,7 +360,8 @@ app.registerExtension({
                             const info = meshInfo || {
                                 filename,
                                 extrinsics,
-                                intrinsics
+                                intrinsics,
+                                overlay_image
                             };
                             if (!iframe.contentWindow) {
                                 console.error("[GeomPack Gaussian v2] Iframe contentWindow not available");
@@ -371,6 +373,7 @@ app.registerExtension({
                                 const targetFilename = info.filename || filename;
                                 const targetExtrinsics = info.extrinsics || extrinsics;
                                 const targetIntrinsics = info.intrinsics || intrinsics;
+                                const targetOverlayImage = info.overlay_image || overlay_image;
                                 const targetPath = `/view?filename=${encodeURIComponent(targetFilename)}&type=output&subfolder=`;
 
                                 console.log("[GeomPack Gaussian v2] Fetching PLY file:", targetPath);
@@ -388,6 +391,7 @@ app.registerExtension({
                                     filename: targetFilename,
                                     extrinsics: targetExtrinsics,
                                     intrinsics: targetIntrinsics,
+                                    overlay_image: targetOverlayImage,
                                     timestamp: Date.now()
                                 }, "*", [arrayBuffer]);
                             } catch (error) {
@@ -398,7 +402,7 @@ app.registerExtension({
                         this.fetchAndSend = fetchAndSend;
 
                         // Fetch and send when iframe is ready
-                        const meshInfo = { filename, extrinsics, intrinsics };
+                        const meshInfo = { filename, extrinsics, intrinsics, overlay_image };
                         this.pendingMeshInfo = meshInfo;
                         if (iframeLoaded) {
                             fetchAndSend(meshInfo);
