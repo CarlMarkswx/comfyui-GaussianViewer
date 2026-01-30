@@ -142,13 +142,24 @@ app.registerExtension({
                 const node = this;
 
                 // computeSize should return the current node size to allow the widget to fill the node
+                let lastHeight = 0;
                 widget.computeSize = function(width) {
-                    return [width, node.size[1] - 30]; // Subtract title bar height approx
+                    const h = node.size[1] - 30;
+                    if (Math.abs(h - lastHeight) < 4) return [width, lastHeight];
+                    lastHeight = h;
+                    return [width, h];
                 };
 
                 // Store references
                 this.renderGaussianIframe = iframe;
                 this.renderInfoPanel = infoPanel;
+                this.resizable = true;
+
+                this.onResize = function(size) {
+                    if (this.setDirtyCanvas) {
+                        this.setDirtyCanvas(true, true);
+                    }
+                };
 
                 // Store pending render requests
                 this.pendingRenderRequests = new Map();
