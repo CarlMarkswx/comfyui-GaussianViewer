@@ -138,6 +138,14 @@ app.registerExtension({
                     setValue(v) { }
                 });
 
+                // Store reference to node for dynamic resizing
+                const node = this;
+
+                // computeSize should return the current node size to allow the widget to fill the node
+                widget.computeSize = function(width) {
+                    return [width, node.size[1] - 30]; // Subtract title bar height approx
+                };
+
                 // Store references
                 this.renderGaussianIframe = iframe;
                 this.renderInfoPanel = infoPanel;

@@ -58,21 +58,24 @@
             flex-wrap: wrap;
             justify-content: center;
             align-items: center;
-            gap: 8px 12px;
+            gap: 4px 8px;
             background: #252525;
-            padding: 8px 12px;
+            padding: 6px 10px;
             border-top: 1px solid #333;
             flex-shrink: 0;
+            width: 100%;
+            z-index: 100;
         }
 
         #controlsBar button {
             background: #444;
             border: none;
             color: #fff;
-            padding: 4px 10px;
+            padding: 4px 8px;
             border-radius: 3px;
             cursor: pointer;
-            font-size: 11px;
+            font-size: 10px;
+            white-space: nowrap;
         }
 
         #controlsBar button:hover {
@@ -82,26 +85,28 @@
         .scale-control {
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 4px;
+            flex-shrink: 0;
         }
 
         .scale-control span {
             color: #888;
-            font-size: 11px;
+            font-size: 10px;
+            white-space: nowrap;
         }
 
         .scale-control input[type="number"] {
-            width: 60px;
+            width: 50px;
             background: #333;
             border: 1px solid #555;
             color: #fff;
-            font-size: 11px;
-            padding: 4px 6px;
+            font-size: 10px;
+            padding: 3px 5px;
             border-radius: 3px;
         }
 
         .scale-control input[type="range"] {
-            width: 70px;
+            width: 60px;
             margin: 0;
         }
 

@@ -74,9 +74,11 @@ app.registerExtension({
 
                 // Store reference to node for dynamic resizing
                 const node = this;
-                let currentNodeSize = [512, 580];
 
-                widget.computeSize = () => currentNodeSize;
+                // computeSize should return the current node size to allow the widget to fill the node
+                widget.computeSize = function(width) {
+                    return [width, node.size[1] - 30]; // Subtract title bar height approx
+                };
 
                 // Store references
                 this.gaussianViewerIframe = iframe;
@@ -88,12 +90,11 @@ app.registerExtension({
                 // Function to resize node dynamically
                 this.resizeToAspectRatio = function(imageWidth, imageHeight) {
                     const aspectRatio = imageWidth / imageHeight;
-                    const nodeWidth = 512;
+                    const nodeWidth = Math.max(512, node.size[0]);
                     const viewerHeight = Math.round(nodeWidth / aspectRatio);
                     const nodeHeight = viewerHeight + 60;  // Add space for info panel
 
-                    currentNodeSize = [nodeWidth, nodeHeight];
-                    node.setSize(currentNodeSize);
+                    node.setSize([nodeWidth, nodeHeight]);
                     node.setDirtyCanvas(true, true);
                     app.graph.setDirtyCanvas(true, true);
 
