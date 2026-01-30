@@ -74,9 +74,21 @@ app.registerExtension({
 
                 // Store reference to node for dynamic resizing
                 const node = this;
-                let currentNodeSize = [512, 580];
 
-                widget.computeSize = () => currentNodeSize;
+                // computeSize should return the current node size to allow the widget to fill the node
+                const WIDGET_OFFSET = 100;
+                let lastHeight = 0;
+                widget.computeSize = function(width) {
+                    const h = Math.floor(Math.max(100, node.size[1] - WIDGET_OFFSET) / 10) * 10;
+                    if (Math.abs(h - lastHeight) < 10) return [width, lastHeight];
+                    lastHeight = h;
+                    return [width, h];
+                };
+
+                // Override node's computeSize to return a fixed minimum, preventing auto-expansion
+                this.computeSize = function() {
+                    return [512, 200];
+                };
 
                 // Store references
                 this.gaussianViewerIframe = iframe;
@@ -88,16 +100,17 @@ app.registerExtension({
                 // Function to resize node dynamically
                 this.resizeToAspectRatio = function(imageWidth, imageHeight) {
                     const aspectRatio = imageWidth / imageHeight;
-                    const nodeWidth = 512;
+                    const nodeWidth = Math.max(512, node.size[0]);
                     const viewerHeight = Math.round(nodeWidth / aspectRatio);
-                    const nodeHeight = viewerHeight + 60;  // Add space for info panel
+                    const nodeHeight = viewerHeight + 100;  // Match WIDGET_OFFSET
 
-                    currentNodeSize = [nodeWidth, nodeHeight];
-                    node.setSize(currentNodeSize);
-                    node.setDirtyCanvas(true, true);
-                    app.graph.setDirtyCanvas(true, true);
-
-                    console.log("[GeomPack Gaussian v2] Resized node to:", nodeWidth, "x", nodeHeight, "(aspect ratio:", aspectRatio.toFixed(2), ")");
+                    // Only resize if the change is significant to avoid tiny loops
+                    if (Math.abs(node.size[1] - nodeHeight) > 10 || Math.abs(node.size[0] - nodeWidth) > 10) {
+                        node.setSize([nodeWidth, nodeHeight]);
+                        node.setDirtyCanvas(true, true);
+                        app.graph.setDirtyCanvas(true, true);
+                        console.log("[GeomPack Gaussian v2] Resized node to:", nodeWidth, "x", nodeHeight, "(aspect ratio:", aspectRatio.toFixed(2), ")");
+                    }
                 };
 
                 // Track iframe load state
@@ -304,7 +317,13 @@ app.registerExtension({
 
                 // Set initial node size
                 this.setSize([512, 580]);
+                this.resizable = true;
 
+                this.onResize = function(size) {
+                    if (this.setDirtyCanvas) {
+                        this.setDirtyCanvas(true, true);
+                    }
+                };
 
                 // Handle execution
                 const onExecuted = this.onExecuted;
