@@ -144,10 +144,15 @@ app.registerExtension({
                 // computeSize should return the current node size to allow the widget to fill the node
                 let lastHeight = 0;
                 widget.computeSize = function(width) {
-                    const h = node.size[1] - 30;
+                    const h = Math.max(100, node.size[1] - 60); // Increased offset to 60 to prevent growth loops
                     if (Math.abs(h - lastHeight) < 4) return [width, lastHeight];
                     lastHeight = h;
                     return [width, h];
+                };
+
+                // Override node's computeSize to return a fixed minimum, preventing auto-expansion
+                this.computeSize = function() {
+                    return [512, 580];
                 };
 
                 // Store references
