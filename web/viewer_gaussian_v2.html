@@ -11,6 +11,10 @@
             box-sizing: border-box;
         }
 
+        :root {
+            --ui-scale: 1.0;
+        }
+
         body {
             background: #1a1a1a;
             overflow: hidden;
@@ -58,9 +62,9 @@
             flex-wrap: wrap;
             justify-content: center;
             align-items: center;
-            gap: 4px 8px;
+            gap: calc(4px * var(--ui-scale)) calc(8px * var(--ui-scale));
             background: #252525;
-            padding: 6px 10px;
+            padding: calc(6px * var(--ui-scale)) calc(10px * var(--ui-scale));
             border-top: 1px solid #333;
             flex-shrink: 0;
             width: 100%;
@@ -71,10 +75,10 @@
             background: #444;
             border: none;
             color: #fff;
-            padding: 4px 8px;
-            border-radius: 3px;
+            padding: calc(4px * var(--ui-scale)) calc(8px * var(--ui-scale));
+            border-radius: calc(3px * var(--ui-scale));
             cursor: pointer;
-            font-size: 10px;
+            font-size: calc(10px * var(--ui-scale));
             white-space: nowrap;
         }
 
@@ -85,29 +89,33 @@
         .scale-control {
             display: flex;
             align-items: center;
-            gap: 4px;
+            gap: calc(4px * var(--ui-scale));
             flex-shrink: 0;
         }
 
         .scale-control span {
             color: #888;
-            font-size: 10px;
+            font-size: calc(10px * var(--ui-scale));
             white-space: nowrap;
         }
 
         .scale-control input[type="number"] {
-            width: 50px;
+            width: calc(50px * var(--ui-scale));
             background: #333;
             border: 1px solid #555;
             color: #fff;
-            font-size: 10px;
-            padding: 3px 5px;
-            border-radius: 3px;
+            font-size: calc(10px * var(--ui-scale));
+            padding: calc(3px * var(--ui-scale)) calc(5px * var(--ui-scale));
+            border-radius: calc(3px * var(--ui-scale));
         }
 
         .scale-control input[type="range"] {
-            width: 60px;
+            width: calc(60px * var(--ui-scale));
             margin: 0;
+        }
+
+        #overlayControl {
+            display: none;
         }
 
         .info-panel {
@@ -218,10 +226,10 @@
             <input type="number" id="gaussianScaleValue" min="0.01" max="100" step="0.1" value="1.0" title="Gaussian scale multiplier">
         </div>
         <button id="resetCamera" title="Reset camera view">Reset View</button>
-        <div class="scale-control">
+        <div id="overlayControl" class="scale-control">
             <span>Overlay:</span>
             <input type="range" id="overlayAlpha" min="0" max="1" step="0.01" value="0.5" title="Overlay image transparency">
-            <input type="number" id="overlayAlphaValue" min="0" max="1" step="0.01" value="0.5" title="Overlay alpha value" style="width: 50px; background: #333; border: 1px solid #555; color: #fff; font-size: 11px; padding: 4px 6px; border-radius: 3px;">
+            <input type="number" id="overlayAlphaValue" min="0" max="1" step="0.01" value="0.5" title="Overlay alpha value">
         </div>
         <div class="scale-control">
             <span>Focal:</span>
@@ -1500,11 +1508,14 @@
                 console.log('[GaussianViewer] Intrinsics:', intrinsics);
 
                 const overlayImage = document.getElementById('overlayImage');
+                const overlayControl = document.getElementById('overlayControl');
                 if (overlay_image && overlayImage) {
                     overlayImage.src = "/view?filename=" + encodeURIComponent(overlay_image) + "&type=output";
                     overlayImage.style.display = "block";
+                    if (overlayControl) overlayControl.style.display = "flex";
                 } else if (overlayImage) {
                     overlayImage.style.display = "none";
+                    if (overlayControl) overlayControl.style.display = "none";
                 }
 
                 await loadPLYFromData(data, filename || 'gaussian.ply', extrinsics, intrinsics);
@@ -1532,6 +1543,14 @@
 
         // Initialize on load
         initViewer();
+
+        const updateUIScale = () => {
+            const width = window.innerWidth;
+            const scale = Math.max(0.7, Math.min(1.8, 1.0 + (width - 512) / 1000));
+            document.documentElement.style.setProperty('--ui-scale', scale);
+        };
+        new ResizeObserver(updateUIScale).observe(document.body);
+        updateUIScale();
 
         console.log('[GaussianViewer] Ready - waiting for LOAD_MESH message');
     </script>
