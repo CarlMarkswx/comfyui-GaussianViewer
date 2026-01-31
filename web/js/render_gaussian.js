@@ -138,9 +138,34 @@ app.registerExtension({
                     setValue(v) { }
                 });
 
+                // Store reference to node for dynamic resizing
+                const node = this;
+
+                // computeSize should return the current node size to allow the widget to fill the node
+                const WIDGET_OFFSET = 100;
+                let lastHeight = 0;
+                widget.computeSize = function(width) {
+                    const h = Math.floor(Math.max(100, node.size[1] - WIDGET_OFFSET) / 10) * 10;
+                    if (Math.abs(h - lastHeight) < 10) return [width, lastHeight];
+                    lastHeight = h;
+                    return [width, h];
+                };
+
+                // Override node's computeSize to return a fixed minimum, preventing auto-expansion
+                this.computeSize = function() {
+                    return [512, 200];
+                };
+
                 // Store references
                 this.renderGaussianIframe = iframe;
                 this.renderInfoPanel = infoPanel;
+                this.resizable = true;
+
+                this.onResize = function(size) {
+                    if (this.setDirtyCanvas) {
+                        this.setDirtyCanvas(true, true);
+                    }
+                };
 
                 // Store pending render requests
                 this.pendingRenderRequests = new Map();
