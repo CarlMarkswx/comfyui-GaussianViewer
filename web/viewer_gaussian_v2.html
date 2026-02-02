@@ -210,7 +210,7 @@
                 <span style="color: #6cc;">WASD / Arrows</span> <span>Move / Pan</span>
                 <span style="color: #6cc;">Q / E</span> <span>Yaw (Left/Right)</span>
                 <span style="color: #6cc;">R / F</span> <span>Pitch (Up/Down)</span>
-                <span style="color: #6cc;">Z / X</span> <span>Roll</span>
+                <span style="color: #6cc;">Z / C</span> <span>Roll</span>
                 <span style="color: #6cc;">Shift</span> <span>Precision (0.1x)</span>
                 <span style="color: #6cc;">Left Click</span> <span>Orbit</span>
                 <span style="color: #6cc;">Right Click</span> <span>Pan</span>
@@ -275,6 +275,13 @@
 
         // Default focal length
         const DEFAULT_FOCAL_LENGTH = 30;
+        const SCALE_DENSITY_BOOST = 3.0;
+
+        const computeScaleCompensation = (imageWidth, containerWidth) => {
+            if (!imageWidth || !containerWidth) return 1.0;
+            const ratio = imageWidth / containerWidth;
+            return ratio * SCALE_DENSITY_BOOST;
+        };
 
         // Initialize the viewer
         function initViewer() {
@@ -554,11 +561,11 @@
                 // Let's try applying a stronger multiplier.
                 // If resolution is locked, we are in "High Res Mode".
                 // Let's scale up by the ratio AND a bit more.
-                gaussianScaleCompensation = (imageWidth / containerWidth) * 3.0; // 3.0 is a heuristic "density boost"
+                gaussianScaleCompensation = computeScaleCompensation(imageWidth, containerWidth);
 
                 console.log('[GaussianViewer] Native resolution:', imageWidth, 'x', imageHeight);
                 console.log('[GaussianViewer] Container size:', containerWidth, 'x', containerHeight);
-                console.log('[GaussianViewer] Gaussian scale compensation (with 3x boost):', gaussianScaleCompensation.toFixed(2), 'x');
+                console.log('[GaussianViewer] Gaussian scale compensation (with boost):', gaussianScaleCompensation.toFixed(2), 'x');
 
                 // Calculate vertical FOV in radians for logging
                 const fovY = 2 * Math.atan(imageHeight / (2 * fy));
@@ -689,21 +696,11 @@
                     const cx = intrinsics[0][2];
                     const imageWidth = cx * 2;
                     const containerWidth = canvas.clientWidth || 512;
-                    
-                    // Base compensation: Ratio of Native / Display
-                    let ratio = imageWidth / containerWidth;
-                    
-                    // Heuristic: Add a "Density Boost" for high-res rendering.
-                    // High-res rendering tends to make points look sparse because they don't overlap as much
-                    // as they do in lower resolutions (due to sub-pixel vs pixel rasterization effects).
-                    // We multiply by an extra factor to simulate the "fullness" of a lower-res view.
-                    // Based on user feedback, a factor of ~10.0 (total) is often needed for ideal density.
-                    const DENSITY_BOOST = 10.0;
-                    
-                    gaussianScaleCompensation = ratio * DENSITY_BOOST;
-                    
+
+                    gaussianScaleCompensation = computeScaleCompensation(imageWidth, containerWidth);
+
                     console.log('[GaussianViewer] Pre-calculated scale compensation:', gaussianScaleCompensation.toFixed(2), 'x');
-                    console.log('[GaussianViewer] Ratio:', ratio.toFixed(2), 'Density Boost:', DENSITY_BOOST);
+                    console.log('[GaussianViewer] Ratio:', (imageWidth / containerWidth).toFixed(2), 'Density Boost:', SCALE_DENSITY_BOOST);
                     console.log('[GaussianViewer] (Image:', imageWidth, 'px / Container:', containerWidth, 'px)');
                 }
 
@@ -860,6 +857,10 @@
                         controls.setCameraTarget(initialCameraData.target);
                     }
 
+                    if (controls.resetRoll) {
+                        controls.resetRoll();
+                    }
+
                     console.log('[GaussianViewer] Reset camera to position:', pos.x, pos.y, pos.z);
                     console.log('[GaussianViewer] Reset camera target:', initialCameraData.target?.x, initialCameraData.target?.y, initialCameraData.target?.z);
                 } else {
@@ -868,6 +869,9 @@
                     camera.position.y = 0;
                     camera.position.z = 5;
                     console.log('[GaussianViewer] Reset camera to default position (0, 0, 5)');
+                    if (controls.resetRoll) {
+                        controls.resetRoll();
+                    }
                 }
                 controls.update();
                 focalScaleInput.value = 1.0;

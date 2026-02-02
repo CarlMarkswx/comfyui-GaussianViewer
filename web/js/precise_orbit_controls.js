@@ -28,7 +28,7 @@
             this.maxZoom = 100;
 
             this.orbitSpeed = 1.0;
-            this.panSpeed = 1.0;
+            this.panSpeed = 2.5;
             this.zoomSpeed = 1.0;
             this.keySpeed = 1.0;
             this.dampening = 0.15;
@@ -122,8 +122,8 @@
                 const right = new SPLAT.Vector3(rotationMatrix[0], rotationMatrix[3], rotationMatrix[6]);
                 const forward = new SPLAT.Vector3(rotationMatrix[2], rotationMatrix[5], rotationMatrix[8]);
 
-                if (this.keys['KeyW']) this.targetTarget = this.targetTarget.subtract(forward.multiply(moveSpeed));
-                if (this.keys['KeyS']) this.targetTarget = this.targetTarget.add(forward.multiply(moveSpeed));
+                if (this.keys['KeyW']) this.targetTarget = this.targetTarget.add(forward.multiply(moveSpeed));
+                if (this.keys['KeyS']) this.targetTarget = this.targetTarget.subtract(forward.multiply(moveSpeed));
                 if (this.keys['KeyA']) this.targetTarget = this.targetTarget.subtract(right.multiply(moveSpeed));
                 if (this.keys['KeyD']) this.targetTarget = this.targetTarget.add(right.multiply(moveSpeed));
 
@@ -132,7 +132,7 @@
                 if (this.keys['KeyR']) this.targetBeta += rotSpeed;
                 if (this.keys['KeyF']) this.targetBeta -= rotSpeed;
                 if (this.keys['KeyZ']) this.targetRoll += rotSpeed;
-                if (this.keys['KeyX']) this.targetRoll -= rotSpeed;
+                if (this.keys['KeyC']) this.targetRoll -= rotSpeed;
 
                 // Smoothing
                 const lerp = (a, b, t) => (1 - t) * a + t * b;
@@ -174,6 +174,11 @@
                 this.currentBeta = this.targetBeta;
                 this.currentRadius = this.targetRadius;
                 this.target = this.targetTarget.clone();
+            };
+
+            this.resetRoll = () => {
+                this.currentRoll = 0;
+                this.targetRoll = 0;
             };
 
             this.getCameraTarget = () => this.targetTarget;
