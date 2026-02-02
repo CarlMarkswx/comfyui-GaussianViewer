@@ -115,12 +115,14 @@ app.registerExtension({
 
                 // Track iframe load state
                 let iframeLoaded = false;
-                iframe.addEventListener('load', () => {
+                const handleIframeLoad = () => {
                     iframeLoaded = true;
                     if (this.pendingMeshInfo) {
                         this.fetchAndSend?.(this.pendingMeshInfo);
                     }
-                });
+                };
+                iframe.addEventListener('load', handleIframeLoad);
+                this._geompackIframeLoadHandler = handleIframeLoad;
                 
                 if (isGaussianViewer) {
                     const nodeId = this.id;
@@ -158,10 +160,11 @@ app.registerExtension({
                     };
 
                     api.addEventListener("geompack_render_request", handleRenderRequest);
+                    this._geompackRenderRequestHandler = handleRenderRequest;
                 }
 
                 // Listen for messages from iframe
-                window.addEventListener('message', async (event) => {
+                const handleWindowMessage = async (event) => {
                     if (event.source !== iframe.contentWindow) {
                         return;
                     }
@@ -313,7 +316,9 @@ app.registerExtension({
                         };
                         window.postMessage(payload, "*");
                     }
-                });
+                };
+                window.addEventListener('message', handleWindowMessage);
+                this._geompackPreviewWindowHandler = handleWindowMessage;
 
                 // Set initial node size
                 this.setSize([512, 580]);
@@ -323,6 +328,24 @@ app.registerExtension({
                     if (this.setDirtyCanvas) {
                         this.setDirtyCanvas(true, true);
                     }
+                };
+
+                const onRemoved = this.onRemoved;
+                this.onRemoved = function() {
+                    if (this._geompackPreviewWindowHandler) {
+                        window.removeEventListener('message', this._geompackPreviewWindowHandler);
+                    }
+                    if (this._geompackRenderRequestHandler) {
+                        api.removeEventListener("geompack_render_request", this._geompackRenderRequestHandler);
+                    }
+                    if (this._geompackIframeLoadHandler) {
+                        iframe.removeEventListener('load', this._geompackIframeLoadHandler);
+                    }
+                    if (window.GEOMPACK_PREVIEW_IFRAMES) {
+                        if (this.currentPlyFile) delete window.GEOMPACK_PREVIEW_IFRAMES[this.currentPlyFile];
+                        if (this.currentFilename) delete window.GEOMPACK_PREVIEW_IFRAMES[this.currentFilename];
+                    }
+                    onRemoved?.apply(this, arguments);
                 };
 
                 // Handle execution

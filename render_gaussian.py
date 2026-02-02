@@ -15,6 +15,7 @@ from io import BytesIO
 
 import hashlib
 import json
+import time
 import numpy as np
 import torch
 from PIL import Image
@@ -46,6 +47,14 @@ class RenderGaussianNode:
         # Use class-level storage to share between node instances and JavaScript
         if not hasattr(RenderGaussianNode, "render_results"):
             RenderGaussianNode.render_results = {}
+        if not hasattr(RenderGaussianNode, "render_results_meta"):
+            RenderGaussianNode.render_results_meta = {}
+        if not hasattr(RenderGaussianNode, "render_results_queue"):
+            RenderGaussianNode.render_results_queue = []
+        if not hasattr(RenderGaussianNode, "render_results_max"):
+            RenderGaussianNode.render_results_max = 200
+        if not hasattr(RenderGaussianNode, "render_results_ttl"):
+            RenderGaussianNode.render_results_ttl = 300  # seconds
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -256,16 +265,53 @@ class RenderGaussianNode:
         
         Results are stored in class-level dict by JavaScript widget.
         """
-        import time
         start_time = time.time()
         print(f"[RenderGaussian] Waiting for render result: request_id={request_id}, timeout={timeout}s")
         while time.time() - start_time < timeout:
+            self._prune_render_results()
             if request_id in RenderGaussianNode.render_results:
                 result = RenderGaussianNode.render_results.pop(request_id)
+                RenderGaussianNode.render_results_meta.pop(request_id, None)
+                try:
+                    RenderGaussianNode.render_results_queue.remove(request_id)
+                except ValueError:
+                    pass
                 print(f"[RenderGaussian] Render result found for request_id={request_id}")
                 return result
             time.sleep(0.1)
         raise TimeoutError(f"Render timeout for request {request_id}")
+
+    @classmethod
+    def _store_render_result(cls, request_id: str, image: str):
+        """Store render result with TTL and size-based eviction."""
+        now = time.time()
+        cls.render_results[request_id] = image
+        cls.render_results_meta[request_id] = now
+        cls.render_results_queue.append(request_id)
+        cls._prune_render_results()
+
+    @classmethod
+    def _prune_render_results(cls):
+        """Evict old render results by TTL and max size."""
+        now = time.time()
+        ttl = getattr(cls, "render_results_ttl", 300)
+        max_items = getattr(cls, "render_results_max", 200)
+
+        # TTL eviction
+        expired = [key for key, ts in list(cls.render_results_meta.items()) if now - ts > ttl]
+        for key in expired:
+            cls.render_results.pop(key, None)
+            cls.render_results_meta.pop(key, None)
+            try:
+                cls.render_results_queue.remove(key)
+            except ValueError:
+                pass
+
+        # Size-based eviction (FIFO)
+        while len(cls.render_results_queue) > max_items:
+            oldest = cls.render_results_queue.pop(0)
+            cls.render_results.pop(oldest, None)
+            cls.render_results_meta.pop(oldest, None)
 
     def _lookup_camera_state(self, ply_path: str, relative_path: str, filename: str):
         """Lookup cached camera state by possible keys."""
@@ -447,7 +493,7 @@ try:
             return web.json_response({"status": "error", "reason": "missing request_id or image"}, status=400)
 
         print(f"[RenderGaussian] render_result received: request_id={request_id}, image_len={len(image)}")
-        RenderGaussianNode.render_results[request_id] = image
+        RenderGaussianNode._store_render_result(request_id, image)
         return web.json_response({"status": "ok"})
 
     @PromptServer.instance.routes.post("/geompack/preview_camera")

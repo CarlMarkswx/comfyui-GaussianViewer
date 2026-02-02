@@ -173,13 +173,15 @@ app.registerExtension({
 
                 // Track iframe load state
                 let iframeLoaded = false;
-                iframe.addEventListener('load', () => {
+                const handleIframeLoad = () => {
                     iframeLoaded = true;
                     console.log("[GeomPack Render Gaussian] Iframe loaded");
-                });
+                };
+                iframe.addEventListener('load', handleIframeLoad);
+                this._geompackRenderIframeLoadHandler = handleIframeLoad;
 
                 // Listen for messages from iframe or Preview node
-                window.addEventListener('message', async (event) => {
+                const handleWindowMessage = async (event) => {
                     const isRenderResult = event.data?.type === 'RENDER_RESULT' && event.data.request_id;
                     const isRenderError = event.data?.type === 'RENDER_ERROR' && event.data.request_id;
                     const fromPreview = event.data?.source === 'preview_gaussian_v2';
@@ -255,10 +257,27 @@ app.registerExtension({
 
                         setStatus(`Error: ${error}`, "#ff6b6b");
                     }
-                });
+                };
+                window.addEventListener('message', handleWindowMessage);
+                this._geompackRenderWindowHandler = handleWindowMessage;
 
                 // Keep track of processed request IDs to avoid duplicates
                 const processedRequestIds = new Set();
+                const processedRequestQueue = [];
+                const MAX_PROCESSED_REQUESTS = 200;
+                const rememberProcessedRequest = (requestId) => {
+                    if (processedRequestIds.has(requestId)) {
+                        return;
+                    }
+                    processedRequestIds.add(requestId);
+                    processedRequestQueue.push(requestId);
+                    if (processedRequestQueue.length > MAX_PROCESSED_REQUESTS) {
+                        const oldest = processedRequestQueue.shift();
+                        if (oldest) {
+                            processedRequestIds.delete(oldest);
+                        }
+                    }
+                };
                 
                 // Listen for backend render request events
                 const handleRenderRequest = async (event) => {
@@ -387,7 +406,7 @@ app.registerExtension({
                     console.log(`[GeomPack Render Gaussian] Processing render request ${requestId}, node_id: ${nodeId}`);
                     setStatus("Loading PLY...", "#ffcc00");
                     this.pendingRenderRequests.set(requestId, {});
-                    processedRequestIds.add(requestId);
+                    rememberProcessedRequest(requestId);
                     console.log("[GeomPack Render Gaussian] Pending requests:", this.pendingRenderRequests.size);
 
                     try {
@@ -397,7 +416,7 @@ app.registerExtension({
                         if (previewIframe && previewIframe.contentWindow) {
                             setStatus("Rendering via Preview...", "#ffcc00");
                             this.pendingRenderRequests.set(requestId, {});
-                            processedRequestIds.add(requestId);
+                            rememberProcessedRequest(requestId);
 
                             previewIframe.contentWindow.postMessage({
                                 type: "OUTPUT_SETTINGS",
@@ -495,6 +514,21 @@ app.registerExtension({
                 };
 
                 api.addEventListener("geompack_render_request", handleRenderRequest);
+                this._geompackRenderRequestHandler = handleRenderRequest;
+
+                const onRemoved = this.onRemoved;
+                this.onRemoved = function() {
+                    if (this._geompackRenderWindowHandler) {
+                        window.removeEventListener('message', this._geompackRenderWindowHandler);
+                    }
+                    if (this._geompackRenderRequestHandler) {
+                        api.removeEventListener("geompack_render_request", this._geompackRenderRequestHandler);
+                    }
+                    if (this._geompackRenderIframeLoadHandler) {
+                        iframe.removeEventListener('load', this._geompackRenderIframeLoadHandler);
+                    }
+                    onRemoved?.apply(this, arguments);
+                };
 
                 return r;
             };

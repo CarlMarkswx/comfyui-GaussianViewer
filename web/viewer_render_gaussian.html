@@ -72,6 +72,13 @@
         let baseScales = null;
 
         const DEFAULT_FOCAL_LENGTH = 30;
+        const SCALE_DENSITY_BOOST = 3.0;
+
+        const computeScaleCompensation = (imageWidth, containerWidth) => {
+            if (!imageWidth || !containerWidth) return 1.0;
+            const ratio = imageWidth / containerWidth;
+            return ratio * SCALE_DENSITY_BOOST;
+        };
 
         // Current render request
         let currentRequestId = null;
@@ -244,9 +251,7 @@
 
                 // Calculate scale compensation
                 const containerWidth = canvas.clientWidth || 512;
-                const ratio = imageWidth / containerWidth;
-                const DENSITY_BOOST = 3.0;
-                let gaussianScaleCompensation = ratio * DENSITY_BOOST;
+                let gaussianScaleCompensation = computeScaleCompensation(imageWidth, containerWidth);
                 
                 console.log('[RenderGaussian] Scale compensation:', gaussianScaleCompensation);
 
@@ -681,11 +686,8 @@
                             const imageWidth = camera_state.image_width;
                             const containerWidth = canvas.clientWidth || 512;
                             console.log(`[RenderGaussian] Computing scale compensation: imageWidth=${imageWidth}, containerWidth=${containerWidth}`);
-                            if (imageWidth && containerWidth) {
-                                const ratio = imageWidth / containerWidth;
-                                compensation = ratio * 3.0;
-                                console.log(`[RenderGaussian] Computed scale compensation: ${compensation} (ratio=${ratio})`);
-                            }
+                            compensation = computeScaleCompensation(imageWidth, containerWidth);
+                            console.log(`[RenderGaussian] Computed scale compensation: ${compensation} (ratio=${(imageWidth / containerWidth).toFixed(2)})`);
                         }
                         if (compensation) {
                             console.log(`[RenderGaussian] Applying scale compensation: ${compensation}`);
