@@ -5,6 +5,11 @@
 Combined Gaussian viewer node.
 
 Merges preview and render into a single IMAGE-producing node.
+
+Outputs:
+  - image: Rendered image from the current camera view
+  - extrinsics: 4x4 camera-to-world matrix from viewer state
+  - intrinsics: 3x3 camera intrinsics matrix (fx, fy, cx, cy)
 """
 
 import os
@@ -14,11 +19,128 @@ import torch
 from PIL import Image
 
 from .render_gaussian import RenderGaussianNode, COMFYUI_OUTPUT_FOLDER
+from .camera_params import get_camera_state
+
+
+def camera_state_to_extrinsics(camera_state):
+    """
+    Convert camera state (position, target) to a 4x4 extrinsics matrix.
+    
+    Returns a list-of-lists representation of the camera-to-world transform.
+    The matrix follows OpenGL convention: columns are [right, up, -forward, position].
+    """
+    if not camera_state:
+        return None
+    
+    position = camera_state.get('position')
+    target = camera_state.get('target')
+    
+    if not position or not target:
+        return None
+    
+    # Extract position
+    px = float(position.get('x', 0))
+    py = float(position.get('y', 0))
+    pz = float(position.get('z', 0))
+    
+    # Extract target
+    if isinstance(target, dict):
+        tx = float(target.get('x', 0))
+        ty = float(target.get('y', 0))
+        tz = float(target.get('z', 0))
+    else:
+        tx, ty, tz = 0, 0, 0
+    
+    # Compute forward vector (camera looks toward target)
+    forward = np.array([tx - px, ty - py, tz - pz])
+    forward_norm = np.linalg.norm(forward)
+    if forward_norm < 1e-8:
+        forward = np.array([0, 0, -1])
+    else:
+        forward = forward / forward_norm
+    
+    # Compute right and up vectors (assuming Y-up world)
+    world_up = np.array([0, 1, 0])
+    right = np.cross(forward, world_up)
+    right_norm = np.linalg.norm(right)
+    if right_norm < 1e-8:
+        # Forward is parallel to world up, use different reference
+        world_up = np.array([0, 0, 1])
+        right = np.cross(forward, world_up)
+        right_norm = np.linalg.norm(right)
+    right = right / right_norm
+    
+    up = np.cross(right, forward)
+    up = up / np.linalg.norm(up)
+    
+    # Build 4x4 camera-to-world matrix
+    # Convention: columns are right, up, -forward (OpenGL style)
+    extrinsics = [
+        [float(right[0]), float(up[0]), float(-forward[0]), float(px)],
+        [float(right[1]), float(up[1]), float(-forward[1]), float(py)],
+        [float(right[2]), float(up[2]), float(-forward[2]), float(pz)],
+        [0.0, 0.0, 0.0, 1.0]
+    ]
+    
+    return extrinsics
+
+
+def camera_state_to_intrinsics(camera_state):
+    """
+    Convert camera state (fx, fy, image dimensions) to a 3x3 intrinsics matrix.
+    
+    Returns a list-of-lists representation of the camera intrinsics.
+    
+    Matrix format:
+        [[fx,  0, cx],
+         [ 0, fy, cy],
+         [ 0,  0,  1]]
+    
+    Where fx, fy are focal lengths and (cx, cy) is the principal point.
+    """
+    if not camera_state:
+        return None
+    
+    fx = camera_state.get('fx')
+    fy = camera_state.get('fy')
+    image_width = camera_state.get('image_width')
+    image_height = camera_state.get('image_height')
+    
+    if fx is None or fy is None:
+        return None
+    
+    fx = float(fx)
+    fy = float(fy)
+    
+    # Principal point at image center
+    cx = float(image_width) / 2.0 if image_width else fx
+    cy = float(image_height) / 2.0 if image_height else fy
+    
+    intrinsics = [
+        [fx, 0.0, cx],
+        [0.0, fy, cy],
+        [0.0, 0.0, 1.0]
+    ]
+    
+    return intrinsics
 
 
 class GaussianViewerNode(RenderGaussianNode):
     """
     Preview + render Gaussian splatting PLY files in a single node.
+    
+    This is the main node that combines interactive 3D preview with high-quality rendering.
+    
+    Inputs:
+        - ply_path: Path to Gaussian Splatting PLY file (required)
+        - extrinsics: 4x4 camera matrix for initial view (optional)
+        - intrinsics: 3x3 camera matrix for FOV (optional)
+        - image: Reference image for overlay (optional)
+    
+    Outputs:
+        - image: Rendered image from viewer camera state
+        - extrinsics: 4x4 camera-to-world matrix from viewer
+        - intrinsics: 3x3 camera intrinsics from viewer
     """
 
     @classmethod
@@ -43,15 +165,16 @@ class GaussianViewerNode(RenderGaussianNode):
             },
         }
 
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("image",)
+    RETURN_TYPES = ("IMAGE", "EXTRINSICS", "INTRINSICS")
+    RETURN_NAMES = ("image", "extrinsics", "intrinsics")
     OUTPUT_NODE = True
     FUNCTION = "gaussian_viewer"
     CATEGORY = "geompack/visualization"
 
     def gaussian_viewer(self, ply_path: str, extrinsics=None, intrinsics=None, image=None):
         """
-        Preview the PLY in the viewer and return the rendered IMAGE output.
+        Preview the PLY in the viewer and return the rendered IMAGE output,
+        along with camera extrinsics and intrinsics from the viewer state.
         """
         print("=" * 80)
         print("[GaussianViewer] ===== VIEWER NODE EXECUTED =====")
@@ -63,13 +186,13 @@ class GaussianViewerNode(RenderGaussianNode):
 
         if not ply_path:
             print("[GaussianViewer] ERROR: No PLY path provided")
-            image = self._create_placeholder_image(2048, 1.0)
-            return {"ui": {"error": ["No PLY path provided"]}, "result": (image,)}
+            placeholder_image = self._create_placeholder_image(2048, 1.0)
+            return {"ui": {"error": ["No PLY path provided"]}, "result": (placeholder_image, None, None)}
 
         if not os.path.exists(ply_path):
             print(f"[GaussianViewer] ERROR: PLY file not found: {ply_path}")
-            image = self._create_placeholder_image(2048, 1.0)
-            return {"ui": {"error": [f"File not found: {ply_path}"]}, "result": (image,)}
+            placeholder_image = self._create_placeholder_image(2048, 1.0)
+            return {"ui": {"error": [f"File not found: {ply_path}"]}, "result": (placeholder_image, None, None)}
 
         filename = os.path.basename(ply_path)
         if COMFYUI_OUTPUT_FOLDER and ply_path.startswith(COMFYUI_OUTPUT_FOLDER):
@@ -120,8 +243,32 @@ class GaussianViewerNode(RenderGaussianNode):
         print("[GaussianViewer] ===== VIEWER PREVIEW READY =====")
         print("=" * 80)
 
+        # Render the image
         image_tuple = super().render_gaussian(ply_path, extrinsics, intrinsics)
-        return {"ui": ui_data, "result": image_tuple}
+        rendered_image = image_tuple[0]
+
+        # Look up camera state and convert to extrinsics/intrinsics
+        camera_state = None
+        for key in (ply_path, relative_path, filename):
+            camera_state = get_camera_state(key)
+            if camera_state:
+                print(f"[GaussianViewer] Found camera state for key: {key}")
+                break
+
+        output_extrinsics = camera_state_to_extrinsics(camera_state)
+        output_intrinsics = camera_state_to_intrinsics(camera_state)
+
+        if output_extrinsics:
+            print(f"[GaussianViewer] Output extrinsics: 4x4 matrix")
+        else:
+            print("[GaussianViewer] Output extrinsics: None (no camera state)")
+
+        if output_intrinsics:
+            print(f"[GaussianViewer] Output intrinsics: 3x3 matrix")
+        else:
+            print("[GaussianViewer] Output intrinsics: None (no camera state)")
+
+        return {"ui": ui_data, "result": (rendered_image, output_extrinsics, output_intrinsics)}
 
 
 NODE_CLASS_MAPPINGS = {

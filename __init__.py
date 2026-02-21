@@ -12,14 +12,17 @@ high-quality image output capabilities.
 CAMERA_PARAMS_BY_KEY = {}
 
 from .gaussian_viewer import GaussianViewerNode, NODE_CLASS_MAPPINGS as VIEWER_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS as VIEWER_DISPLAY_MAPPINGS
+from .extrinsics_to_pose import ExtrinsicsToPoseNode, NODE_CLASS_MAPPINGS as POSE_MAPPINGS, NODE_DISPLAY_NAME_MAPPINGS as POSE_DISPLAY_MAPPINGS
 
 # Combine node mappings from active nodes only (deprecated nodes hidden)
 NODE_CLASS_MAPPINGS = {
     **VIEWER_MAPPINGS,
+    **POSE_MAPPINGS,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     **VIEWER_DISPLAY_MAPPINGS,
+    **POSE_DISPLAY_MAPPINGS,
 }
 
 WEB_DIRECTORY = "./web"
