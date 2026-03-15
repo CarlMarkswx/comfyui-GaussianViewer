@@ -204,13 +204,32 @@ app.registerExtension({
 
                 // Track whether initial settings have been sent to iframe
                 this.hasInitializedSettings = false;
+                this._hasAutoResized = false;
 
                 // Function to resize node dynamically
                 this.resizeToAspectRatio = function(imageWidth, imageHeight) {
-                    const aspectRatio = imageWidth / imageHeight;
-                    const nodeWidth = Math.max(512, node.size[0]);
-                    const viewerHeight = Math.round(nodeWidth / aspectRatio);
-                    const nodeHeight = viewerHeight + 100;  // Match WIDGET_OFFSET
+                    const width = Number(imageWidth);
+                    const height = Number(imageHeight);
+                    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+                        console.warn("[GeomPack Gaussian v2] Skip auto resize: invalid image size", imageWidth, imageHeight);
+                        return;
+                    }
+
+                    const aspectRatio = width / height;
+                    if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) {
+                        console.warn("[GeomPack Gaussian v2] Skip auto resize: invalid aspect ratio", aspectRatio);
+                        return;
+                    }
+
+                    const MIN_NODE_WIDTH = 512;
+                    const MAX_NODE_WIDTH = 800;
+                    const MIN_VIEWER_HEIGHT = 180;
+                    const MAX_VIEWER_HEIGHT = 900;
+
+                    const nodeWidth = Math.min(Math.max(MIN_NODE_WIDTH, node.size[0]), MAX_NODE_WIDTH);
+                    const viewerHeightRaw = Math.round(nodeWidth / aspectRatio);
+                    const viewerHeight = Math.min(Math.max(MIN_VIEWER_HEIGHT, viewerHeightRaw), MAX_VIEWER_HEIGHT);
+                    const nodeHeight = viewerHeight + WIDGET_OFFSET;
 
                     // Only resize if the change is significant to avoid tiny loops
                     if (Math.abs(node.size[1] - nodeHeight) > 10 || Math.abs(node.size[0] - nodeWidth) > 10) {
@@ -496,11 +515,18 @@ app.registerExtension({
                         const intrinsics = uiData.intrinsics?.[0] || null;
                         const overlay_image = uiData.overlay_image?.[0] || null;
 
-                        // Resize node to match image aspect ratio from intrinsics
-                        if (intrinsics && intrinsics[0] && intrinsics[1]) {
-                            const imageWidth = intrinsics[0][2] * 2;   // cx * 2
-                            const imageHeight = intrinsics[1][2] * 2;  // cy * 2
-                            this.resizeToAspectRatio(imageWidth, imageHeight);
+                        // Resize node once to match image aspect ratio from intrinsics
+                        if (!this._hasAutoResized && intrinsics && intrinsics[0] && intrinsics[1]) {
+                            const cx = Number(intrinsics[0][2]);
+                            const cy = Number(intrinsics[1][2]);
+                            const imageWidth = cx * 2;
+                            const imageHeight = cy * 2;
+                            if (Number.isFinite(imageWidth) && Number.isFinite(imageHeight) && imageWidth > 0 && imageHeight > 0) {
+                                this.resizeToAspectRatio(imageWidth, imageHeight);
+                                this._hasAutoResized = true;
+                            } else {
+                                console.warn("[GeomPack Gaussian v2] Skip auto resize: invalid intrinsics", intrinsics);
+                            }
                         }
 
                         // Update info panel
