@@ -387,10 +387,22 @@
             try {
                 console.log('[GaussianViewer] Creating scene...');
                 scene = new SPLAT.Scene();
-                
+
                 console.log('[GaussianViewer] Creating camera...');
                 camera = new SPLAT.Camera();
-                
+
+                // Patch canvas.getContext to force preserveDrawingBuffer: true
+                // This is required so that toDataURL() can read the rendered frame
+                // instead of getting a blank/black buffer after the browser composites.
+                const originalGetContext = canvas.getContext.bind(canvas);
+                canvas.getContext = function(type, attrs) {
+                    if (type === 'webgl2' || type === 'webgl') {
+                        attrs = Object.assign({}, attrs || {}, { preserveDrawingBuffer: true });
+                        console.log('[GaussianViewer] Patched getContext with preserveDrawingBuffer: true');
+                    }
+                    return originalGetContext(type, attrs);
+                };
+
                 console.log('[GaussianViewer] Creating renderer...');
                 renderer = new SPLAT.WebGLRenderer(canvas);
                 
@@ -1082,15 +1094,31 @@
         }
 
         async function renderForRequest(requestId, resolution, aspectRatio) {
+            // Wait for renderer and scene to be ready (up to 20 seconds)
+            const maxWait = 20000;
+            const interval = 250;
+            let waited = 0;
+            while ((!renderer || !renderer.canvas || !currentSplat) && waited < maxWait) {
+                await new Promise(r => setTimeout(r, interval));
+                waited += interval;
+            }
+
             if (!renderer || !renderer.canvas) {
+                console.error('[GaussianViewer] Render failed: renderer not ready after', waited, 'ms');
                 window.parent.postMessage({
                     type: 'RENDER_ERROR',
                     request_id: requestId,
-                    error: 'renderer not ready',
+                    error: 'renderer not ready after waiting ' + waited + 'ms',
                     source: 'preview_gaussian_v2',
                     timestamp: Date.now()
                 }, '*');
                 return;
+            }
+
+            if (!currentSplat) {
+                console.warn('[GaussianViewer] Render proceeding without splat after', waited, 'ms wait');
+            } else if (waited > 0) {
+                console.log('[GaussianViewer] Renderer and scene ready after', waited, 'ms');
             }
 
             try {
@@ -1100,6 +1128,9 @@
 
                 if (scene && camera) {
                     controls.update();
+                    renderer.render(scene, camera);
+                    // Allow an extra frame for the render to complete
+                    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
                     renderer.render(scene, camera);
                 }
 

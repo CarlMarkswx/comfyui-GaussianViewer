@@ -269,6 +269,52 @@ app.registerExtension({
                         const requestId = message.request_id;
                         const resolution = message.output_resolution || 2048;
                         const aspectRatio = message.output_aspect_ratio || "source";
+                        const plyFile = message.ply_file;
+                        const msgFilename = message.filename;
+
+                        // Pre-load PLY if not already loaded in the viewer
+                        if (plyFile && this.currentPlyFile !== plyFile) {
+                            try {
+                                const targetPath = `/view?filename=${encodeURIComponent(plyFile)}&type=output&subfolder=`;
+                                console.log("[GeomPack Gaussian v2] Pre-loading PLY for render:", targetPath);
+                                const response = await fetch(targetPath);
+                                if (response.ok) {
+                                    const arrayBuffer = await response.arrayBuffer();
+                                    iframe.contentWindow.postMessage({
+                                        type: "LOAD_MESH_DATA",
+                                        data: arrayBuffer,
+                                        filename: plyFile,
+                                        extrinsics: message.extrinsics || null,
+                                        intrinsics: message.intrinsics || null,
+                                        timestamp: Date.now()
+                                    }, "*", [arrayBuffer]);
+
+                                    this.currentPlyFile = plyFile;
+                                    this.currentFilename = msgFilename || plyFile;
+                                    if (window.GEOMPACK_PREVIEW_IFRAMES) {
+                                        window.GEOMPACK_PREVIEW_IFRAMES[this.currentPlyFile] = iframe;
+                                        window.GEOMPACK_PREVIEW_IFRAMES[this.currentFilename] = iframe;
+                                    }
+
+                                    // Give the viewer time to load and render the PLY
+                                    await new Promise(r => setTimeout(r, 3000));
+                                } else {
+                                    console.error("[GeomPack Gaussian v2] Failed to fetch PLY:", response.status);
+                                }
+                            } catch (err) {
+                                console.error("[GeomPack Gaussian v2] Failed to pre-load PLY:", err);
+                            }
+                        }
+
+                        // Apply camera state if provided
+                        if (message.camera_state && iframe.contentWindow) {
+                            iframe.contentWindow.postMessage({
+                                type: "APPLY_CAMERA_STATE",
+                                camera_state: message.camera_state
+                            }, "*");
+                            // Small delay for camera to settle
+                            await new Promise(r => setTimeout(r, 200));
+                        }
 
                         iframe.contentWindow.postMessage({
                             type: "OUTPUT_SETTINGS",
