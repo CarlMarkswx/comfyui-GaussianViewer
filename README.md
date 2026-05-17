@@ -4,6 +4,15 @@
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
 
+## 版本下载
+
+本仓库在同一个 GitHub 项目中保留两个互不干扰的 ComfyUI 版本，README 共用这一份说明：
+
+- 旧版 ComfyUI：下载 [`legacy-comfyui`](https://github.com/CarlMarkswx/comfyui_GaussianViewer/archive/refs/heads/legacy-comfyui.zip)
+- 新版 ComfyUI：下载 [`new-comfyui`](https://github.com/CarlMarkswx/comfyui_GaussianViewer/archive/refs/heads/new-comfyui.zip)
+
+如果你的 ComfyUI 还没有更新，请使用旧版；如果已经更新到新版 ComfyUI，请使用新版。
+
 为 ComfyUI 提供高斯泼溅（Gaussian Splatting）PLY 文件的交互式 3D 预览和高质量图像输出功能。
 
 **注意**：本插件基于 [ComfyUI-GeometryPack](https://github.com/PozzettiAndrea/ComfyUI-GeometryPack) 改进而来，当前版本将预览与渲染合并为单一节点（`GaussianViewer`）。

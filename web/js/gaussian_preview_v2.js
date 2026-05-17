@@ -13,6 +13,27 @@ const EXTENSION_FOLDER = (() => {
     return match ? match[1] : "ComfyUI-GeometryPack";
 })();
 
+const getNodeClass = (nodeType, nodeData) => {
+    return nodeData?.name || nodeType?.comfyClass || nodeType?.ComfyClass || nodeType?.type;
+};
+
+const makeViewUrl = ({ filename, subfolder = "", type = "output" }) => {
+    const params = new URLSearchParams({
+        filename: filename || "",
+        type: type || "output",
+        subfolder: subfolder || ""
+    });
+    return `/view?${params.toString()}`;
+};
+
+const postJson = (url, payload) => {
+    return api.fetchApi(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+    });
+};
+
 console.log("[GeomPack Gaussian v2] Loading extension...");
 
 function ensureGeompackConfirmDialog() {
@@ -127,13 +148,14 @@ app.registerExtension({
     name: "geompack.gaussianpreview.v2",
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "GeomPackPreviewGaussian2" || nodeData.name === "GaussianViewer") {
+        const comfyClass = getNodeClass(nodeType, nodeData);
+        if (comfyClass === "GeomPackPreviewGaussian2" || comfyClass === "GaussianViewer") {
             console.log("[GeomPack Gaussian v2] Registering Preview Gaussian 2.0 node");
 
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             nodeType.prototype.onNodeCreated = function() {
                 const r = onNodeCreated ? onNodeCreated.apply(this, arguments) : undefined;
-                const isGaussianViewer = nodeData.name === "GaussianViewer";
+                const isGaussianViewer = comfyClass === "GaussianViewer";
 
                 window.GEOMPACK_PREVIEW_IFRAMES = window.GEOMPACK_PREVIEW_IFRAMES || {};
 
@@ -145,6 +167,7 @@ app.registerExtension({
                 container.style.flexDirection = "column";
                 container.style.backgroundColor = "#1a1a1a";
                 container.style.overflow = "hidden";
+                container.style.minWidth = "0";
 
                 // Create iframe for gsplat.js viewer
                 const iframe = document.createElement("iframe");
@@ -174,29 +197,39 @@ app.registerExtension({
                 container.appendChild(iframe);
                 container.appendChild(infoPanel);
 
-                // Add widget with required options
-                const widget = this.addDOMWidget("preview_gaussian_v2", "GAUSSIAN_PREVIEW_V2", container, {
-                    getValue() { return ""; },
-                    setValue(v) { }
-                });
-
                 // Store reference to node for dynamic resizing
                 const node = this;
-
-                // computeSize should return the current node size to allow the widget to fill the node
                 const WIDGET_OFFSET = 100;
-                let lastHeight = 0;
-                widget.computeSize = function(width) {
-                    const h = Math.floor(Math.max(100, node.size[1] - WIDGET_OFFSET) / 10) * 10;
-                    if (Math.abs(h - lastHeight) < 10) return [width, lastHeight];
-                    lastHeight = h;
-                    return [width, h];
+                const MIN_WIDGET_HEIGHT = 180;
+                const getWidgetHeight = () => {
+                    return Math.max(MIN_WIDGET_HEIGHT, Math.floor((node.size?.[1] || 580) - WIDGET_OFFSET));
+                };
+                const syncWidgetBounds = () => {
+                    const widgetHeight = getWidgetHeight();
+                    container.style.width = "100%";
+                    container.style.maxWidth = "none";
+                    container.style.height = `${widgetHeight}px`;
+                    container.style.setProperty("--comfy-widget-min-height", `${MIN_WIDGET_HEIGHT}px`);
+                    container.style.setProperty("--comfy-widget-height", `${widgetHeight}px`);
+                    iframe.style.width = "100%";
+                    iframe.style.height = "100%";
+                    infoPanel.style.width = "100%";
                 };
 
-                // Override node's computeSize to return a fixed minimum, preventing auto-expansion
-                this.computeSize = function() {
-                    return [512, 200];
-                };
+                // Add widget with required options
+                const addedWidget = this.addDOMWidget("preview_gaussian_v2", "GAUSSIAN_PREVIEW_V2", container, {
+                    getValue() { return ""; },
+                    setValue(v) { },
+                    getMinHeight: () => MIN_WIDGET_HEIGHT,
+                    getHeight: () => getWidgetHeight(),
+                    onResize: () => syncWidgetBounds(),
+                    afterResize: () => syncWidgetBounds(),
+                });
+
+                // Keep the widget on ComfyUI's DOM layout path. Defining
+                // widget.computeSize() makes it a fixed-size legacy widget and
+                // causes the DOM overlay to snap back on node selection.
+                syncWidgetBounds();
 
                 // Store references
                 this.gaussianViewerIframe = iframe;
@@ -252,13 +285,13 @@ app.registerExtension({
                 this._geompackIframeLoadHandler = handleIframeLoad;
                 
                 if (isGaussianViewer) {
-                    const nodeId = this.id;
                     const handleRenderRequest = async (event) => {
                         const message = event?.detail || event;
                         if (!message?.request_id) {
                             return;
                         }
-                        if (message.node_id != null && message.node_id !== undefined && message.node_id !== nodeId) {
+                        const currentNodeId = this.id;
+                        if (message.node_id != null && message.node_id !== undefined && String(message.node_id) !== String(currentNodeId)) {
                             return;
                         }
                         if (!iframe.contentWindow) {
@@ -271,11 +304,33 @@ app.registerExtension({
                         const aspectRatio = message.output_aspect_ratio || "source";
                         const plyFile = message.ply_file;
                         const msgFilename = message.filename;
+                        const msgSubfolder = message.subfolder || "";
+                        const msgType = message.type || "output";
+                        const reportRenderError = async (error) => {
+                            const payload = {
+                                type: "RENDER_ERROR",
+                                request_id: requestId,
+                                error,
+                                source: "preview_gaussian_v2",
+                                backend_reported: true,
+                                timestamp: Date.now()
+                            };
+                            window.postMessage(payload, "*");
+                            try {
+                                await postJson("/geompack/render_error", { request_id: requestId, error });
+                            } catch (postError) {
+                                console.error("[GeomPack Gaussian v2] Error sending render error:", postError);
+                            }
+                        };
 
                         // Pre-load PLY if not already loaded in the viewer
                         if (plyFile && this.currentPlyFile !== plyFile) {
                             try {
-                                const targetPath = `/view?filename=${encodeURIComponent(plyFile)}&type=output&subfolder=`;
+                                const targetPath = makeViewUrl({
+                                    filename: msgFilename || plyFile,
+                                    subfolder: msgSubfolder,
+                                    type: msgType
+                                });
                                 console.log("[GeomPack Gaussian v2] Pre-loading PLY for render:", targetPath);
                                 const response = await fetch(targetPath);
                                 if (response.ok) {
@@ -291,6 +346,8 @@ app.registerExtension({
 
                                     this.currentPlyFile = plyFile;
                                     this.currentFilename = msgFilename || plyFile;
+                                    this.currentSubfolder = msgSubfolder;
+                                    this.currentType = msgType;
                                     if (window.GEOMPACK_PREVIEW_IFRAMES) {
                                         window.GEOMPACK_PREVIEW_IFRAMES[this.currentPlyFile] = iframe;
                                         window.GEOMPACK_PREVIEW_IFRAMES[this.currentFilename] = iframe;
@@ -299,10 +356,16 @@ app.registerExtension({
                                     // Give the viewer time to load and render the PLY
                                     await new Promise(r => setTimeout(r, 3000));
                                 } else {
-                                    console.error("[GeomPack Gaussian v2] Failed to fetch PLY:", response.status);
+                                    const error = `Failed to fetch PLY: HTTP ${response.status}`;
+                                    console.error("[GeomPack Gaussian v2]", error);
+                                    await reportRenderError(error);
+                                    return;
                                 }
                             } catch (err) {
-                                console.error("[GeomPack Gaussian v2] Failed to pre-load PLY:", err);
+                                const error = `Failed to pre-load PLY: ${err?.message || err}`;
+                                console.error("[GeomPack Gaussian v2]", error, err);
+                                await reportRenderError(error);
+                                return;
                             }
                         }
 
@@ -434,14 +497,12 @@ app.registerExtension({
                         });
                         
                         try {
-                            const response = await fetch('/geompack/preview_camera', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    ply_file: plyFile,
-                                    filename: filename,
-                                    camera_state: cameraState
-                                })
+                            const response = await postJson('/geompack/preview_camera', {
+                                ply_file: plyFile,
+                                filename: filename,
+                                subfolder: this.currentSubfolder || "",
+                                type: this.currentType || "output",
+                                camera_state: cameraState
                             });
                             console.log('[GeomPack Gaussian v2] Backend response status:', response.status, response.statusText);
                             if (!response.ok) {
@@ -486,11 +547,7 @@ app.registerExtension({
                         window.postMessage(payload, "*");
 
                         try {
-                            const response = await fetch("/geompack/render_result", {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ request_id: payload.request_id, image: payload.image })
-                            });
+                            const response = await postJson("/geompack/render_result", { request_id: payload.request_id, image: payload.image });
                             if (!response.ok) {
                                 console.error("[GeomPack Gaussian v2] Failed to send render result:", response.status);
                             } else {
@@ -502,9 +559,18 @@ app.registerExtension({
                     } else if (event.data.type === 'RENDER_ERROR' && event.data.request_id) {
                         const payload = {
                             ...event.data,
-                            source: 'preview_gaussian_v2'
+                            source: 'preview_gaussian_v2',
+                            backend_reported: true
                         };
                         window.postMessage(payload, "*");
+                        try {
+                            const response = await postJson("/geompack/render_error", { request_id: payload.request_id, error: payload.error });
+                            if (!response.ok) {
+                                console.error("[GeomPack Gaussian v2] Failed to send render error:", response.status);
+                            }
+                        } catch (error) {
+                            console.error("[GeomPack Gaussian v2] Error sending render error:", error);
+                        }
                     }
                 };
                 window.addEventListener('message', handleWindowMessage);
@@ -514,7 +580,10 @@ app.registerExtension({
                 this.setSize([512, 580]);
                 this.resizable = true;
 
+                const onResize = this.onResize;
                 this.onResize = function(size) {
+                    onResize?.apply(this, arguments);
+                    syncWidgetBounds();
                     if (this.setDirtyCanvas) {
                         this.setDirtyCanvas(true, true);
                     }
@@ -552,8 +621,11 @@ app.registerExtension({
 
                     const uiData = message?.ui || message;
                     if (uiData?.ply_file && uiData.ply_file[0]) {
-                        const filename = uiData.ply_file[0];
-                        const displayName = uiData.filename?.[0] || filename;
+                        const plyFile = uiData.ply_file[0];
+                        const filename = uiData.filename?.[0] || plyFile;
+                        const subfolder = uiData.subfolder?.[0] || "";
+                        const fileType = uiData.type?.[0] || "output";
+                        const displayName = uiData.filename?.[0] || plyFile;
                         const fileSizeMb = uiData.file_size_mb?.[0] || 'N/A';
 
                         // Extract camera parameters if provided
@@ -586,18 +658,22 @@ app.registerExtension({
                         `;
 
                         // Store current file info for camera param saving
-                        this.currentPlyFile = filename;
-                        this.currentFilename = uiData.filename?.[0] || filename;
+                        this.currentPlyFile = plyFile;
+                        this.currentFilename = filename;
+                        this.currentSubfolder = subfolder;
+                        this.currentType = fileType;
                         window.GEOMPACK_PREVIEW_IFRAMES[this.currentPlyFile] = iframe;
                         window.GEOMPACK_PREVIEW_IFRAMES[this.currentFilename] = iframe;
 
                         // ComfyUI serves output files via /view API endpoint
-                        const filepath = `/view?filename=${encodeURIComponent(filename)}&type=output&subfolder=`;
+                        const filepath = makeViewUrl({ filename, subfolder, type: fileType });
 
                         // Function to fetch and send data to iframe
                         const fetchAndSend = async (meshInfo = null) => {
                             const info = meshInfo || {
                                 filename,
+                                subfolder,
+                                type: fileType,
                                 extrinsics,
                                 intrinsics,
                                 overlay_image
@@ -610,10 +686,16 @@ app.registerExtension({
                             try {
                                 // Fetch the PLY file from parent context (authenticated)
                                 const targetFilename = info.filename || filename;
+                                const targetSubfolder = info.subfolder ?? subfolder;
+                                const targetType = info.type || fileType;
                                 const targetExtrinsics = info.extrinsics || extrinsics;
                                 const targetIntrinsics = info.intrinsics || intrinsics;
                                 const targetOverlayImage = info.overlay_image || overlay_image;
-                                const targetPath = `/view?filename=${encodeURIComponent(targetFilename)}&type=output&subfolder=`;
+                                const targetPath = makeViewUrl({
+                                    filename: targetFilename,
+                                    subfolder: targetSubfolder,
+                                    type: targetType
+                                });
 
                                 console.log("[GeomPack Gaussian v2] Fetching PLY file:", targetPath);
                                 const response = await fetch(targetPath);
@@ -641,7 +723,7 @@ app.registerExtension({
                         this.fetchAndSend = fetchAndSend;
 
                         // Fetch and send when iframe is ready
-                        const meshInfo = { filename, extrinsics, intrinsics, overlay_image };
+                        const meshInfo = { filename, subfolder, type: fileType, extrinsics, intrinsics, overlay_image };
                         this.pendingMeshInfo = meshInfo;
                         if (iframeLoaded) {
                             fetchAndSend(meshInfo);

@@ -4,6 +4,15 @@
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
 
+## Version Downloads
+
+This repository keeps two independent ComfyUI-compatible versions in the same GitHub project, with this README as the shared entry point:
+
+- Older ComfyUI: download [`legacy-comfyui`](https://github.com/CarlMarkswx/comfyui_GaussianViewer/archive/refs/heads/legacy-comfyui.zip)
+- Newer ComfyUI: download [`new-comfyui`](https://github.com/CarlMarkswx/comfyui_GaussianViewer/archive/refs/heads/new-comfyui.zip)
+
+Use the legacy version if your ComfyUI has not been updated yet. Use the new version if your ComfyUI is already updated.
+
 An all-in-one ComfyUI node plugin for interactive Gaussian Splatting PLY previews and high-quality render outputs.
 
 **Note**: This plugin is adapted from [ComfyUI-GeometryPack](https://github.com/PozzettiAndrea/ComfyUI-GeometryPack), and the current version merges preview + render into a single node (`GaussianViewer`).

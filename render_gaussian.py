@@ -35,6 +35,36 @@ from .camera_params import (
 )
 
 
+def get_comfy_output_file_info(path: str):
+    """Return Comfy /view-compatible file info for a path in the output folder."""
+    filename = os.path.basename(path) if path else ""
+    info = {
+        "filename": filename,
+        "subfolder": "",
+        "type": "output",
+        "relative_path": filename,
+    }
+
+    if not path or not COMFYUI_OUTPUT_FOLDER:
+        return info
+
+    try:
+        output_root = os.path.abspath(COMFYUI_OUTPUT_FOLDER)
+        absolute_path = os.path.abspath(path)
+        output_root_norm = os.path.normcase(output_root)
+        absolute_path_norm = os.path.normcase(absolute_path)
+        if os.path.commonpath([output_root_norm, absolute_path_norm]) == output_root_norm:
+            relative_path = os.path.relpath(absolute_path, output_root)
+            relative_parts = relative_path.split(os.sep)
+            info["filename"] = relative_parts[-1]
+            info["subfolder"] = "/".join(relative_parts[:-1])
+            info["relative_path"] = relative_path.replace(os.sep, "/")
+    except (OSError, ValueError):
+        pass
+
+    return info
+
+
 class RenderGaussianNode:
     """
     Render Gaussian Splatting PLY files.
@@ -51,6 +81,12 @@ class RenderGaussianNode:
             RenderGaussianNode.render_results_meta = {}
         if not hasattr(RenderGaussianNode, "render_results_queue"):
             RenderGaussianNode.render_results_queue = []
+        if not hasattr(RenderGaussianNode, "render_errors"):
+            RenderGaussianNode.render_errors = {}
+        if not hasattr(RenderGaussianNode, "render_errors_meta"):
+            RenderGaussianNode.render_errors_meta = {}
+        if not hasattr(RenderGaussianNode, "render_errors_queue"):
+            RenderGaussianNode.render_errors_queue = []
         if not hasattr(RenderGaussianNode, "render_results_max"):
             RenderGaussianNode.render_results_max = 200
         if not hasattr(RenderGaussianNode, "render_results_ttl"):
@@ -72,6 +108,9 @@ class RenderGaussianNode:
                 "intrinsics": ("INTRINSICS", {
                     "tooltip": "3x3 camera intrinsics matrix (from Preview node or custom)"
                 }),
+            },
+            "hidden": {
+                "node_id": "UNIQUE_ID",
             },
         }
 
@@ -98,7 +137,7 @@ class RenderGaussianNode:
         print(f"[RenderGaussian] IS_CHANGED: camera_version={camera_version}, camera_state={'yes' if camera_state else 'no'}")
         return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
-    def render_gaussian(self, ply_path: str, extrinsics=None, intrinsics=None):
+    def render_gaussian(self, ply_path: str, extrinsics=None, intrinsics=None, node_id=None):
         """
         Execute rendering and return image tensor.
         """
@@ -126,17 +165,18 @@ class RenderGaussianNode:
             print(f"[RenderGaussian] Created placeholder image: {image.shape}")
             return (image,)
 
-        # Get relative path for JavaScript (like Preview node)
-        filename = os.path.basename(ply_path)
-        if COMFYUI_OUTPUT_FOLDER and ply_path.startswith(COMFYUI_OUTPUT_FOLDER):
-            relative_path = os.path.relpath(ply_path, COMFYUI_OUTPUT_FOLDER)
-        else:
-            relative_path = filename
+        file_info = get_comfy_output_file_info(ply_path)
+        filename = file_info["filename"]
+        relative_path = file_info["relative_path"]
+        subfolder = file_info["subfolder"]
+        file_type = file_info["type"]
         
         print(f"[RenderGaussian] File info:")
         print(f"  Full path: {ply_path}")
         print(f"  Relative path: {relative_path}")
         print(f"  Filename: {filename}")
+        print(f"  Subfolder: {subfolder}")
+        print(f"  Type: {file_type}")
 
         # 2. Generate unique request ID
         request_id = self._generate_request_id()
@@ -169,6 +209,8 @@ class RenderGaussianNode:
             "request_id": [request_id],
             "ply_file": [relative_path],  # Use ply_file like Preview node
             "filename": [filename],
+            "subfolder": [subfolder],
+            "type": [file_type],
             "output_resolution": [output_resolution],
             "output_aspect_ratio": ["source"],
         }
@@ -187,7 +229,7 @@ class RenderGaussianNode:
 
         # Send render request to frontend immediately (do not wait for onExecuted)
         send_start = time.time()
-        self._send_render_request(request_id, ui_data)
+        self._send_render_request(request_id, ui_data, node_id=node_id)
         send_end = time.time()
         print(f"[RenderGaussian] Render request sent in {send_end - send_start:.3f}s")
 
@@ -198,14 +240,14 @@ class RenderGaussianNode:
             wait_end = time.time()
             print(f"[RenderGaussian] Render result received in {wait_end - wait_start:.3f}s")
             print(f"[RenderGaussian] Base64 image length: {len(base64_image)}")
-        except TimeoutError as e:
+        except (TimeoutError, RuntimeError) as e:
             wait_end = time.time()
             print(f"[RenderGaussian] ERROR: {e}")
             print(f"[RenderGaussian] Wait time: {wait_end - wait_start:.3f}s")
             print(f"[RenderGaussian] Creating placeholder image...")
             image = self._create_placeholder_image(output_resolution, aspect)
             total_time = time.time() - start_time
-            print(f"[RenderGaussian] ===== RENDER FAILED (Timeout) =====")
+            print(f"[RenderGaussian] ===== RENDER FAILED =====")
             print(f"[RenderGaussian] Total time: {total_time:.3f}s")
             print("=" * 80)
             return (image,)
@@ -278,6 +320,14 @@ class RenderGaussianNode:
                     pass
                 print(f"[RenderGaussian] Render result found for request_id={request_id}")
                 return result
+            if request_id in RenderGaussianNode.render_errors:
+                error = RenderGaussianNode.render_errors.pop(request_id)
+                RenderGaussianNode.render_errors_meta.pop(request_id, None)
+                try:
+                    RenderGaussianNode.render_errors_queue.remove(request_id)
+                except ValueError:
+                    pass
+                raise RuntimeError(f"Frontend render failed for request {request_id}: {error}")
             time.sleep(0.1)
         raise TimeoutError(f"Render timeout for request {request_id}")
 
@@ -288,6 +338,15 @@ class RenderGaussianNode:
         cls.render_results[request_id] = image
         cls.render_results_meta[request_id] = now
         cls.render_results_queue.append(request_id)
+        cls._prune_render_results()
+
+    @classmethod
+    def _store_render_error(cls, request_id: str, error: str):
+        """Store render error so waiting render calls can fail immediately."""
+        now = time.time()
+        cls.render_errors[request_id] = error
+        cls.render_errors_meta[request_id] = now
+        cls.render_errors_queue.append(request_id)
         cls._prune_render_results()
 
     @classmethod
@@ -306,12 +365,24 @@ class RenderGaussianNode:
                 cls.render_results_queue.remove(key)
             except ValueError:
                 pass
+        expired_errors = [key for key, ts in list(cls.render_errors_meta.items()) if now - ts > ttl]
+        for key in expired_errors:
+            cls.render_errors.pop(key, None)
+            cls.render_errors_meta.pop(key, None)
+            try:
+                cls.render_errors_queue.remove(key)
+            except ValueError:
+                pass
 
         # Size-based eviction (FIFO)
         while len(cls.render_results_queue) > max_items:
             oldest = cls.render_results_queue.pop(0)
             cls.render_results.pop(oldest, None)
             cls.render_results_meta.pop(oldest, None)
+        while len(cls.render_errors_queue) > max_items:
+            oldest = cls.render_errors_queue.pop(0)
+            cls.render_errors.pop(oldest, None)
+            cls.render_errors_meta.pop(oldest, None)
 
     def _lookup_camera_state(self, ply_path: str, relative_path: str, filename: str):
         """Lookup cached camera state by possible keys."""
@@ -352,7 +423,7 @@ class RenderGaussianNode:
             return int(round(min_dim * aspect))
         return int(round(min_dim / aspect))
 
-    def _send_render_request(self, request_id: str, ui_data: dict):
+    def _send_render_request(self, request_id: str, ui_data: dict, node_id=None):
         """Send a render request to the frontend via ComfyUI websocket."""
         try:
             from server import PromptServer
@@ -360,25 +431,13 @@ class RenderGaussianNode:
             print(f"[RenderGaussian] PromptServer not available: {e}")
             return
 
-        # Try to get node_id from various possible attributes
-        node_id = getattr(self, "id", None)
-        if node_id is None:
-            node_id = getattr(self, "node_id", None)
-        if node_id is None:
-            node_id = getattr(self, "_id", None)
-        
-        # Also try to get from widget if available
-        if node_id is None:
-            try:
-                node_id = self.widgets_values
-            except:
-                pass
-        
         payload = {
             "request_id": request_id,
             "node_id": node_id,
             "ply_file": ui_data.get("ply_file", [None])[0],
             "filename": ui_data.get("filename", [None])[0],
+            "subfolder": ui_data.get("subfolder", [""])[0],
+            "type": ui_data.get("type", ["output"])[0],
             "output_resolution": ui_data.get("output_resolution", [None])[0],
             "output_aspect_ratio": ui_data.get("output_aspect_ratio", [None])[0],
             "extrinsics": ui_data.get("extrinsics", [None])[0],
@@ -467,11 +526,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
 def _lookup_camera_state_for_change(ply_path: str):
     if not ply_path:
         return None
-    filename = os.path.basename(ply_path)
-    if COMFYUI_OUTPUT_FOLDER and ply_path.startswith(COMFYUI_OUTPUT_FOLDER):
-        relative_path = os.path.relpath(ply_path, COMFYUI_OUTPUT_FOLDER)
-    else:
-        relative_path = filename
+    file_info = get_comfy_output_file_info(ply_path)
+    filename = file_info["filename"]
+    relative_path = file_info["relative_path"]
     for key in (ply_path, relative_path, filename):
         if key and key in CAMERA_PARAMS_BY_KEY:
             return CAMERA_PARAMS_BY_KEY.get(key)
@@ -494,6 +551,20 @@ try:
 
         print(f"[RenderGaussian] render_result received: request_id={request_id}, image_len={len(image)}")
         RenderGaussianNode._store_render_result(request_id, image)
+        return web.json_response({"status": "ok"})
+
+    @PromptServer.instance.routes.post("/geompack/render_error")
+    async def geompack_render_error(request):
+        data = await request.json()
+        request_id = data.get("request_id")
+        error = data.get("error") or "unknown frontend render error"
+
+        if not request_id:
+            print(f"[RenderGaussian] render_error missing request_id: error={error}")
+            return web.json_response({"status": "error", "reason": "missing request_id"}, status=400)
+
+        print(f"[RenderGaussian] render_error received: request_id={request_id}, error={error}")
+        RenderGaussianNode._store_render_error(request_id, str(error))
         return web.json_response({"status": "ok"})
 
     @PromptServer.instance.routes.post("/geompack/preview_camera")

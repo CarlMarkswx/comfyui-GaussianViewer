@@ -13,13 +13,35 @@ const EXTENSION_FOLDER = (() => {
     return match ? match[1] : "ComfyUI-GeometryPack";
 })();
 
+const getNodeClass = (nodeType, nodeData) => {
+    return nodeData?.name || nodeType?.comfyClass || nodeType?.ComfyClass || nodeType?.type;
+};
+
+const makeViewUrl = ({ filename, subfolder = "", type = "output" }) => {
+    const params = new URLSearchParams({
+        filename: filename || "",
+        type: type || "output",
+        subfolder: subfolder || ""
+    });
+    return `/view?${params.toString()}`;
+};
+
+const postJson = (url, payload) => {
+    return api.fetchApi(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+    });
+};
+
 console.log("[GeomPack Render Gaussian] Loading extension...");
 
 app.registerExtension({
     name: "geompack.rendergaussian",
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "GeomPackRenderGaussian") {
+        const comfyClass = getNodeClass(nodeType, nodeData);
+        if (comfyClass === "GeomPackRenderGaussian") {
             console.log("[GeomPack Render Gaussian] Registering Render Gaussian node");
 
             const onNodeCreated = nodeType.prototype.onNodeCreated;
@@ -34,6 +56,7 @@ app.registerExtension({
                 container.style.flexDirection = "column";
                 container.style.backgroundColor = "#1a1a1a";
                 container.style.overflow = "hidden";
+                container.style.minWidth = "0";
 
                 // Create iframe for rendering
                 const iframe = document.createElement("iframe");
@@ -132,45 +155,79 @@ app.registerExtension({
                 container.appendChild(iframe);
                 container.appendChild(infoPanel);
 
-                // Add widget
-                const widget = this.addDOMWidget("render_gaussian", "RENDER_GAUSSIAN", container, {
-                    getValue() { return ""; },
-                    setValue(v) { }
-                });
-
                 // Store reference to node for dynamic resizing
                 const node = this;
-
-                // computeSize should return the current node size to allow the widget to fill the node
                 const WIDGET_OFFSET = 100;
-                let lastHeight = 0;
-                widget.computeSize = function(width) {
-                    const h = Math.floor(Math.max(100, node.size[1] - WIDGET_OFFSET) / 10) * 10;
-                    if (Math.abs(h - lastHeight) < 10) return [width, lastHeight];
-                    lastHeight = h;
-                    return [width, h];
+                const MIN_NODE_WIDTH = 512;
+                const MIN_WIDGET_HEIGHT = 100;
+                let widget = null;
+                const getRenderedNodeWidth = () => {
+                    const nodeId = node.id != null ? String(node.id) : "";
+                    const selector = nodeId ? `[data-node-id="${nodeId.replace(/"/g, '\\"')}"]` : "";
+                    const nodeElement = selector ? document.querySelector(selector) : null;
+                    const widthElement = nodeElement?.querySelector?.('[data-testid="node-inner-wrapper"]') || nodeElement;
+                    const rectWidth = widthElement?.getBoundingClientRect?.().width || 0;
+                    const scale = app.canvas?.ds?.scale || 1;
+                    const renderedWidth = rectWidth / scale;
+                    return Number.isFinite(renderedWidth) && renderedWidth > 0 ? renderedWidth : null;
+                };
+                const getWidgetHeight = () => Math.max(MIN_WIDGET_HEIGHT, Math.floor((node.size?.[1] || 300) - WIDGET_OFFSET));
+                const syncWidgetBounds = () => {
+                    const widgetHeight = getWidgetHeight();
+                    const nodeWidth = Math.max(MIN_NODE_WIDTH, Math.floor(getRenderedNodeWidth() || node.size?.[0] || MIN_NODE_WIDTH));
+                    container.style.width = "100%";
+                    container.style.maxWidth = "none";
+                    container.style.height = `${widgetHeight}px`;
+                    container.style.setProperty("--comfy-widget-min-height", `${MIN_WIDGET_HEIGHT}px`);
+                    container.style.setProperty("--comfy-widget-height", `${widgetHeight}px`);
+                    iframe.style.width = "100%";
+                    iframe.style.height = "100%";
+                    infoPanel.style.width = "100%";
+                    if (widget) {
+                        widget.width = nodeWidth;
+                        widget.computedHeight = widgetHeight + widget.margin * 2;
+                    }
+                    return [nodeWidth, widgetHeight];
                 };
 
-                // Override node's computeSize to return a fixed minimum, preventing auto-expansion
-                this.computeSize = function() {
-                    return [512, 200];
-                };
+                // Add widget
+                widget = this.addDOMWidget("render_gaussian", "RENDER_GAUSSIAN", container, {
+                    getValue() { return ""; },
+                    setValue(v) { },
+                    getMinHeight: () => MIN_WIDGET_HEIGHT,
+                    getHeight: () => getWidgetHeight(),
+                    onResize: () => syncWidgetBounds(),
+                    afterResize: () => syncWidgetBounds(),
+                    onDraw: () => syncWidgetBounds(),
+                });
+
+                // Keep the widget on ComfyUI's DOM layout path. Defining
+                // widget.computeSize() makes it a fixed-size legacy widget and
+                // causes the DOM overlay to snap back on node selection.
+                syncWidgetBounds();
 
                 // Store references
                 this.renderGaussianIframe = iframe;
                 this.renderInfoPanel = infoPanel;
                 this.resizable = true;
 
+                const onResize = this.onResize;
                 this.onResize = function(size) {
+                    onResize?.apply(this, arguments);
+                    syncWidgetBounds();
                     if (this.setDirtyCanvas) {
                         this.setDirtyCanvas(true, true);
                     }
                 };
 
+                const onDrawForeground = this.onDrawForeground;
+                this.onDrawForeground = function(ctx) {
+                    syncWidgetBounds();
+                    onDrawForeground?.apply(this, arguments);
+                };
+
                 // Store pending render requests
                 this.pendingRenderRequests = new Map();
-                const nodeId = this.id;
-
                 // Track iframe load state
                 let iframeLoaded = false;
                 const handleIframeLoad = () => {
@@ -228,11 +285,7 @@ app.registerExtension({
 
                         // Forward result to backend for IMAGE output
                         try {
-                            const response = await fetch("/geompack/render_result", {
-                                method: "POST",
-                                headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ request_id, image })
-                            });
+                            const response = await postJson("/geompack/render_result", { request_id, image });
                             if (!response.ok) {
                                 console.error("[GeomPack Render Gaussian] Failed to send render result:", response.status);
                             } else {
@@ -256,6 +309,16 @@ app.registerExtension({
                         }
 
                         setStatus(`Error: ${error}`, "#ff6b6b");
+                        if (!event.data.backend_reported) {
+                            try {
+                                const response = await postJson("/geompack/render_error", { request_id, error });
+                                if (!response.ok) {
+                                    console.error("[GeomPack Render Gaussian] Failed to send render error:", response.status);
+                                }
+                            } catch (postError) {
+                                console.error("[GeomPack Render Gaussian] Error sending render error:", postError);
+                            }
+                        }
                     }
                 };
                 window.addEventListener('message', handleWindowMessage);
@@ -308,17 +371,19 @@ app.registerExtension({
                     // Check node_id matching (more lenient - allow null/undefined)
                     console.log("[GeomPack Render Gaussian] Node ID check:");
                     console.log(`  Message node_id: ${message.node_id} (type: ${typeof message.node_id})`);
-                    console.log(`  Current node ID: ${nodeId} (type: ${typeof nodeId})`);
+                    const currentNodeId = this.id;
+                    console.log(`  Current node ID: ${currentNodeId} (type: ${typeof currentNodeId})`);
                     
-                    if (message.node_id != null && message.node_id !== undefined && message.node_id !== nodeId) {
-                        console.log(`[GeomPack Render Gaussian] INFO: Request node_id ${message.node_id} does not match current node ${nodeId}`);
-                        console.log("[GeomPack Render Gaussian] Processing anyway as fallback (lenient mode)");
-                    } else {
-                        console.log(`[GeomPack Render Gaussian] INFO: Request node_id matches current node ${nodeId}`);
+                    if (message.node_id != null && message.node_id !== undefined && String(message.node_id) !== String(currentNodeId)) {
+                        console.log(`[GeomPack Render Gaussian] INFO: Request node_id ${message.node_id} does not match current node ${currentNodeId}`);
+                        return;
                     }
+                    console.log(`[GeomPack Render Gaussian] INFO: Request node_id matches current node ${currentNodeId}`);
 
                     const plyFile = message.ply_file;
                     const filename = message.filename || plyFile;
+                    const subfolder = message.subfolder || "";
+                    const fileType = message.type || "output";
                     const resolution = message.output_resolution || 2048;
                     const aspectRatio = message.output_aspect_ratio || "source";
                     const extrinsics = message.extrinsics || null;
@@ -329,6 +394,8 @@ app.registerExtension({
                     console.log("[GeomPack Render Gaussian] Basic parameters:");
                     console.log(`  PLY file: ${plyFile}`);
                     console.log(`  Filename: ${filename}`);
+                    console.log(`  Subfolder: ${subfolder}`);
+                    console.log(`  Type: ${fileType}`);
                     console.log(`  Resolution: ${resolution}`);
                     console.log(`  Aspect ratio: ${aspectRatio}`);
                     console.log(`  Has extrinsics: ${extrinsics !== null}`);
@@ -403,7 +470,7 @@ app.registerExtension({
                     }
                     console.log("[GeomPack Render Gaussian] =====================================");
 
-                    console.log(`[GeomPack Render Gaussian] Processing render request ${requestId}, node_id: ${nodeId}`);
+                    console.log(`[GeomPack Render Gaussian] Processing render request ${requestId}, node_id: ${currentNodeId}`);
                     setStatus("Loading PLY...", "#ffcc00");
                     this.pendingRenderRequests.set(requestId, {});
                     rememberProcessedRequest(requestId);
@@ -437,7 +504,7 @@ app.registerExtension({
                         }
 
                         // Fetch PLY file from ComfyUI /view endpoint (authenticated)
-                        const filepath = `/view?filename=${encodeURIComponent(filename)}&type=output&subfolder=`;
+                        const filepath = makeViewUrl({ filename, subfolder, type: fileType });
                         console.log("[GeomPack Render Gaussian] Fetching PLY file...");
                         console.log(`[GeomPack Render Gaussian] URL: ${filepath}`);
                         
@@ -501,6 +568,15 @@ app.registerExtension({
                         setStatus(`Error: ${error.message}`, "#ff6b6b");
                         this.pendingRenderRequests.delete(requestId);
                         processedRequestIds.delete(requestId);
+
+                        try {
+                            const response = await postJson("/geompack/render_error", { request_id: requestId, error: error.message });
+                            if (!response.ok) {
+                                console.error("[GeomPack Render Gaussian] Failed to send render error:", response.status);
+                            }
+                        } catch (postError) {
+                            console.error("[GeomPack Render Gaussian] Error sending render error:", postError);
+                        }
 
                         // Send error to iframe
                         if (iframe.contentWindow) {

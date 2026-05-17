@@ -18,7 +18,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from .render_gaussian import RenderGaussianNode, COMFYUI_OUTPUT_FOLDER
+from .render_gaussian import RenderGaussianNode, COMFYUI_OUTPUT_FOLDER, get_comfy_output_file_info
 from .camera_params import get_camera_state
 
 
@@ -163,6 +163,9 @@ class GaussianViewerNode(RenderGaussianNode):
                     "tooltip": "Reference image to show as overlay"
                 }),
             },
+            "hidden": {
+                "node_id": "UNIQUE_ID",
+            },
         }
 
     RETURN_TYPES = ("IMAGE", "EXTRINSICS", "INTRINSICS")
@@ -171,7 +174,7 @@ class GaussianViewerNode(RenderGaussianNode):
     FUNCTION = "gaussian_viewer"
     CATEGORY = "geompack/visualization"
 
-    def gaussian_viewer(self, ply_path: str, extrinsics=None, intrinsics=None, image=None):
+    def gaussian_viewer(self, ply_path: str, extrinsics=None, intrinsics=None, image=None, node_id=None):
         """
         Preview the PLY in the viewer and return the rendered IMAGE output,
         along with camera extrinsics and intrinsics from the viewer state.
@@ -194,11 +197,11 @@ class GaussianViewerNode(RenderGaussianNode):
             placeholder_image = self._create_placeholder_image(2048, 1.0)
             return {"ui": {"error": [f"File not found: {ply_path}"]}, "result": (placeholder_image, None, None)}
 
-        filename = os.path.basename(ply_path)
-        if COMFYUI_OUTPUT_FOLDER and ply_path.startswith(COMFYUI_OUTPUT_FOLDER):
-            relative_path = os.path.relpath(ply_path, COMFYUI_OUTPUT_FOLDER)
-        else:
-            relative_path = filename
+        file_info = get_comfy_output_file_info(ply_path)
+        filename = file_info["filename"]
+        relative_path = file_info["relative_path"]
+        subfolder = file_info["subfolder"]
+        file_type = file_info["type"]
 
         file_size = os.path.getsize(ply_path)
         file_size_mb = file_size / (1024 * 1024)
@@ -207,11 +210,15 @@ class GaussianViewerNode(RenderGaussianNode):
         print(f"  Full path: {ply_path}")
         print(f"  Relative path: {relative_path}")
         print(f"  Filename: {filename}")
+        print(f"  Subfolder: {subfolder}")
+        print(f"  Type: {file_type}")
         print(f"  File size: {file_size_mb:.2f} MB ({file_size:,} bytes)")
 
         ui_data = {
             "ply_file": [relative_path],
             "filename": [filename],
+            "subfolder": [subfolder],
+            "type": [file_type],
             "file_size_mb": [round(file_size_mb, 2)],
         }
 
@@ -244,7 +251,7 @@ class GaussianViewerNode(RenderGaussianNode):
         print("=" * 80)
 
         # Render the image
-        image_tuple = super().render_gaussian(ply_path, extrinsics, intrinsics)
+        image_tuple = super().render_gaussian(ply_path, extrinsics, intrinsics, node_id=node_id)
         rendered_image = image_tuple[0]
 
         # Look up camera state and convert to extrinsics/intrinsics
